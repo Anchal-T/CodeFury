@@ -3,11 +3,16 @@
 Tables: tasks, reports, agents, checkpoints, token_usage. Each row keeps the
 queryable columns as real columns and the full pydantic model as a JSON
 payload, so contracts can evolve without schema churn.
+
+Thread-safe: worker pipelines run concurrently in ``asyncio.to_thread``
+threads, so every public method serializes on a lock and the connection is
+opened with ``check_same_thread=False``.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from orchestrator.contracts import Report, Task
@@ -57,29 +62,33 @@ class StateStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
     def connection(self) -> sqlite3.Connection:
         """Open (lazily) and return the shared connection."""
         if self._conn is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(str(self.db_path))
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
     def init_schema(self) -> None:
         """Create all tables and switch the database to WAL mode."""
-        conn = self.connection()
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript(_SCHEMA)
-        conn.commit()
+        with self._lock:
+            conn = self.connection()
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_SCHEMA)
+            conn.commit()
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def __enter__(self) -> "StateStore":
-        self.connection()
+        with self._lock:
+            self.connection()
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -88,17 +97,19 @@ class StateStore:
     # -- tasks -------------------------------------------------------------
 
     def save_task(self, task: Task) -> None:
-        self.connection().execute(
-            "INSERT OR REPLACE INTO tasks (id, parent_id, level, status, assigned_to, payload)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (task.id, task.parent_id, task.level, task.status, task.assigned_to, task.model_dump_json()),
-        )
-        self.connection().commit()
+        with self._lock:
+            self.connection().execute(
+                "INSERT OR REPLACE INTO tasks (id, parent_id, level, status, assigned_to, payload)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (task.id, task.parent_id, task.level, task.status, task.assigned_to, task.model_dump_json()),
+            )
+            self.connection().commit()
 
     def get_task(self, task_id: str) -> Task | None:
-        row = self.connection().execute(
-            "SELECT payload FROM tasks WHERE id = ?", (task_id,)
-        ).fetchone()
+        with self._lock:
+            row = self.connection().execute(
+                "SELECT payload FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
         return Task.model_validate_json(row["payload"]) if row else None
 
     def set_task_status(self, task_id: str, status: str) -> None:
@@ -111,32 +122,35 @@ class StateStore:
     # -- reports -----------------------------------------------------------
 
     def save_report(self, report: Report) -> None:
-        self.connection().execute(
-            "INSERT INTO reports (task_id, agent, tests_passed, tokens_used, payload)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (
-                report.task_id,
-                report.agent,
-                int(report.tests_passed),
-                report.tokens_used,
-                report.model_dump_json(),
-            ),
-        )
-        self.connection().commit()
+        with self._lock:
+            self.connection().execute(
+                "INSERT INTO reports (task_id, agent, tests_passed, tokens_used, payload)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    report.task_id,
+                    report.agent,
+                    int(report.tests_passed),
+                    report.tokens_used,
+                    report.model_dump_json(),
+                ),
+            )
+            self.connection().commit()
 
     def latest_report(self, task_id: str) -> Report | None:
-        row = self.connection().execute(
-            "SELECT payload FROM reports WHERE task_id = ? ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        ).fetchone()
+        with self._lock:
+            row = self.connection().execute(
+                "SELECT payload FROM reports WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
         return Report.model_validate_json(row["payload"]) if row else None
 
     # -- introspection -----------------------------------------------------
 
     def table_names(self) -> tuple[str, ...]:
-        rows = self.connection().execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
         return tuple(row["name"] for row in rows)
 
     def checkpointer(self):

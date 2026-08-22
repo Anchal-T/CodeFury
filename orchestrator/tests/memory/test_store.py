@@ -100,3 +100,30 @@ def test_db_file_created_in_missing_dir(tmp_path: Path) -> None:
         assert (tmp_path / "nested" / "deep" / "x.db").is_file()
     finally:
         store.close()
+
+
+def test_concurrent_writes_from_threads(store: StateStore) -> None:
+    """Workers will run in threads (asyncio.to_thread); the store must cope."""
+    import threading
+
+    errors: list[Exception] = []
+
+    def writer(prefix: str) -> None:
+        try:
+            for i in range(20):
+                store.save_task(make_task(f"{prefix}-{i}"))
+                store.save_report(make_report(f"{prefix}-{i}"))
+        except Exception as exc:  # noqa: BLE001 — recorded and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(f"w{n}",)) for n in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    tasks_count = store.connection().execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    reports_count = store.connection().execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+    assert tasks_count == 80
+    assert reports_count == 80
