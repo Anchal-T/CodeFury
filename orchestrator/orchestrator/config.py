@@ -7,13 +7,16 @@ config.yaml ``execution.zcode_command`` < ``ZCODE_CMD`` environment variable.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 DEFAULT_ZCODE_COMMAND = ["zcode"]
-DEFAULT_TEST_COMMAND = ["python3", "-m", "pytest", "-q"]
+# The running interpreter is the only spawnable python guaranteed to exist on
+# both Linux and Windows ("python3" is not an executable name on Windows).
+DEFAULT_TEST_COMMAND = [sys.executable, "-m", "pytest", "-q"]
 DEFAULT_WORKER_TIMEOUT_S = 1800.0
 
 #: pytest exit code meaning "no tests collected" — not a failure for us.

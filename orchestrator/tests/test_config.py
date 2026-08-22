@@ -1,5 +1,6 @@
 """Tests for orchestrator.config."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_loads_real_repo_config() -> None:
     config = load_config(REPO_CONFIG)
     assert config.execution.zcode_command == ["zcode"]
-    assert config.execution.test_command[:2] == ["python3", "-m"]
+    assert config.execution.test_command == [sys.executable, "-m", "pytest", "-q"]
     assert config.execution.worker_timeout_s == 1800
     assert config.paths.db == Path("./data/orchestrator.db")
     assert config.paths.workspaces == Path("./workspaces")

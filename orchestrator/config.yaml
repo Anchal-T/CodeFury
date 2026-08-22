@@ -17,7 +17,8 @@ execution:
   # A "{prompt}" placeholder is substituted in place; without it the prompt
   # is appended as the last argument.
   zcode_command: [zcode]
-  test_command: [python3, -m, pytest, -q]
+  # test_command defaults to [<running interpreter>, -m, pytest, -q] so it
+  # works on both Linux and Windows; set it here only to override.
   worker_timeout_s: 1800
 
 model_effort:
