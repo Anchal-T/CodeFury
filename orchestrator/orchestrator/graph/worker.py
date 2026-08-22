@@ -48,9 +48,11 @@ def _summarize(result: RunnerResult, tests: TestResult) -> str:
     if result.timed_out:
         parts.append(f"worker timed out after {result.duration_s:.0f}s")
     parts.append(f"worker exit={result.returncode}, tests {'passed' if tests.passed else 'failed'}")
-    tail = (result.stdout or result.stderr).strip()
-    if tail:
-        parts.append(tail[:SUMMARY_MAX_CHARS])
+    worker_tail = (result.stdout or result.stderr).strip()
+    if worker_tail:
+        parts.append(worker_tail[:SUMMARY_MAX_CHARS])
+    if not tests.passed:
+        parts.append("test output tail:\n" + tests.output[-SUMMARY_MAX_CHARS:])
     return "\n".join(parts)
 
 
