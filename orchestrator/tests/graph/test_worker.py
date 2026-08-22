@@ -81,9 +81,10 @@ def test_happy_path_produces_review_report(pipeline) -> None:
     assert store.latest_report("t-42") == report
 
     worktree = worktrees.worktree_path("t-42")
-    assert (worktree / "greeting.py").is_file()
+    modules = list(worktree.glob("module_*.py"))
+    assert len(modules) == 1
     committed = _git(["show", "--name-only", "--pretty=format:", "HEAD"], cwd=worktree)
-    assert "greeting.py" in committed.splitlines()
+    assert modules[0].name in committed.splitlines()
 
 
 def test_failing_tests_fail_the_task(pipeline) -> None:

@@ -47,7 +47,7 @@ def test_manage_command_runs_graph_end_to_end(
 
     assert result.exit_code == 0, result.output
     assert "review" in result.output
-    assert (root / "greeting.py").is_file(), "worker branches should be merged into the repo"
+    assert len(list(root.glob("module_*.py"))) == 2, "worker branches should be merged into the repo"
 
     import sqlite3
 

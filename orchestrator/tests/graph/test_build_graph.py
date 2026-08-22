@@ -86,7 +86,7 @@ def test_graph_merges_both_workers_end_to_end(
 
     assert result["final_status"] == "review"
     assert len(result["merged"]) == 2
-    assert (git_repo / "greeting.py").is_file()
+    assert len(list(git_repo.glob("module_*.py"))) == 2
     assert result["attempts"] == {tid: 1 for tid in result["attempts"]}
 
     workers = [t for t in store.connection().execute("SELECT payload FROM tasks WHERE level = 0")]

@@ -102,11 +102,18 @@ class WorktreeManager:
         ).strip()
 
     def merge(self, worker_id: str) -> None:
-        """Merge the worker's branch into the current branch of repo_root with --no-ff."""
-        self._require(
-            self._git(["merge", "--no-ff", self.branch_name(worker_id), "-m", f"merge(worker): {worker_id}"], cwd=self.repo_root),
-            "merge",
+        """Merge the worker's branch into the current branch of repo_root with --no-ff.
+
+        On failure (e.g. a conflict) the merge is aborted so the repo is left
+        clean for the next worker's merge.
+        """
+        proc = self._git(
+            ["merge", "--no-ff", self.branch_name(worker_id), "-m", f"merge(worker): {worker_id}"],
+            cwd=self.repo_root,
         )
+        if proc.returncode != 0:
+            self._git(["merge", "--abort"], cwd=self.repo_root)
+            raise RuntimeError(f"git merge failed ({proc.returncode}): {proc.stderr.strip()}")
 
     def discard(self, worker_id: str) -> None:
         """Drop the worker's worktree and branch."""
