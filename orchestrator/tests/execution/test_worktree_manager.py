@@ -49,6 +49,20 @@ def test_create_makes_worktree_and_branch(manager: WorktreeManager, git_repo: Pa
     assert str(path) in _git(["worktree", "list"], cwd=git_repo)
 
 
+def test_create_is_idempotent_for_retries(manager: WorktreeManager) -> None:
+    """A retried task id must get a fresh worktree, not a collision error."""
+    first = manager.create("w5")
+    (first / "leftover.txt").write_text("stale attempt\n", encoding="utf-8")
+    manager.commit("w5", "first attempt")
+
+    second = manager.create("w5")
+    assert second == first
+    assert second.is_dir()
+    assert not (second / "leftover.txt").exists(), "retry must start from a clean worktree"
+    (second / "retry.txt").write_text("fresh\n", encoding="utf-8")
+    assert manager.commit("w5", "retry attempt") is True
+
+
 def test_commit_and_diff_stat(manager: WorktreeManager) -> None:
     manager.create("w1")
     (manager.worktree_path("w1") / "feature.py").write_text("x = 1\n", encoding="utf-8")

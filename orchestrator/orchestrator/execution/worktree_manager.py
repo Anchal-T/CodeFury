@@ -8,6 +8,7 @@ subprocess invocations with shell=False so this works on Linux and Windows.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -59,13 +60,24 @@ class WorktreeManager:
         return self.workspaces_dir / f"worker_{sanitize_worker_id(worker_id)}"
 
     def create(self, worker_id: str) -> Path:
-        """Add a worktree on its own branch; return its path."""
+        """Add a worktree on its own branch; return its path.
+
+        Idempotent: leftovers from a previous attempt of the same task
+        (worktree directory and branch) are cleared first, so a retry
+        always starts fresh.
+        """
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
         path = self.worktree_path(worker_id)
-        proc = self._git(
-            ["worktree", "add", str(path), "-b", self.branch_name(worker_id)],
-            cwd=self.repo_root,
-        )
+        branch = self.branch_name(worker_id)
+        if path.is_dir():
+            remove = self._git(["worktree", "remove", "--force", str(path)], cwd=self.repo_root)
+            if remove.returncode != 0:
+                shutil.rmtree(path, ignore_errors=True)
+            self._git(["worktree", "prune"], cwd=self.repo_root)
+        listing = self._git(["branch", "--list", branch], cwd=self.repo_root)
+        if listing.stdout.strip():
+            self._require(self._git(["branch", "-D", branch], cwd=self.repo_root), "branch -D")
+        proc = self._git(["worktree", "add", str(path), "-b", branch], cwd=self.repo_root)
         self._require(proc, f"worktree add {path}")
         return path
 
