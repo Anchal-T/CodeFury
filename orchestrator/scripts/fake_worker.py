@@ -4,8 +4,9 @@ Stands in for a real coding-agent CLI: it receives the task prompt as its
 last argument (exactly like ZCodeRunner passes it) and makes a small, real
 code change in the current working directory.
 
-Usage in the worker config:
-    ZCODE_CMD="python3 scripts/fake_worker.py" python -m orchestrator run --goal "..."
+Usage in the worker config (path relative to the worktree root, which is
+the repo root — the runner executes with cwd set to the worktree):
+    ZCODE_CMD="python3 orchestrator/scripts/fake_worker.py" python -m orchestrator run --goal "..."
 """
 
 from __future__ import annotations
