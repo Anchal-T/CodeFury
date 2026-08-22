@@ -23,8 +23,10 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/worker.py` — Level 0 node: one ZCode subprocess per task.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires all levels into one LangGraph StateGraph.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
-- `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform ZCode CLI subprocess wrapper.
-- `orchestrator/orchestrator/execution/worktree_manager.py` — git worktree add/merge/discard/cleanup.
+- `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
+- `orchestrator/orchestrator/execution/worktree_manager.py` — git worktree create/commit/diff/merge/discard/cleanup plus repo-root discovery.
+- `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
+- `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
 - `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store + LangGraph SqliteSaver.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
