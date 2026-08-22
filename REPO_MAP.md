@@ -28,7 +28,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store + LangGraph SqliteSaver.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store: tasks/reports/agents/checkpoints/token_usage tables + typed round-trips.
+- `orchestrator/tests/memory/test_store.py` — schema, WAL mode, task/report round-trip tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
 - `orchestrator/orchestrator/memory/knowledge_docs.py` — append-only markdown knowledge files (Tier 1).
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
