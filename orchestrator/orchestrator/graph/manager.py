@@ -98,8 +98,3 @@ def finalize_parent(
     )
     store.save_report(report)
     return report
-
-
-def manager_node(state: dict) -> dict:
-    """LangGraph node wrapper — wired into the StateGraph by build_graph."""
-    raise NotImplementedError("Phase 2 wiring")

@@ -32,8 +32,12 @@ class RetryPolicy:
         )
 
     def can_retry(self, task_id: str, attempt: int) -> bool:
-        """attempt is the number of attempts already made (0 = first try)."""
-        return attempt < self.max_worker_retries
+        """attempt is the number of attempts already made (≥1 = has failed once).
+
+        A task gets at most max_worker_retries + 1 attempts in total: the
+        initial try plus max_worker_retries re-attempts.
+        """
+        return 1 <= attempt <= self.max_worker_retries
 
     def can_escalate(self, manager_id: str, escalations: int) -> bool:
         return escalations < self.max_manager_escalations

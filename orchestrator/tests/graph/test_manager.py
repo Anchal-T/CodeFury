@@ -124,7 +124,7 @@ def test_failed_report_past_cap_fails_for_good(deps, store: StateStore) -> None:
     decision = review_reports(
         reports=[make_report("w-1", passed=False)],
         worker_tasks=[task],
-        attempts={"w-1": 2},  # cap of 2 reached: no third attempt
+        attempts={"w-1": 3},  # initial try + 2 retries exhausted
         worktrees=worktrees,
         retry_policy=policy,
         store=store,

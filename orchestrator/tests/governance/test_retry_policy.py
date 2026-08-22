@@ -12,19 +12,20 @@ def make_policy(max_worker_retries: int = 2) -> RetryPolicy:
 
 def test_can_retry_within_cap() -> None:
     policy = make_policy(max_worker_retries=2)
-    assert policy.can_retry("t1", attempt=0) is True
     assert policy.can_retry("t1", attempt=1) is True
+    assert policy.can_retry("t1", attempt=2) is True
 
 
-def test_can_retry_denied_at_cap() -> None:
+def test_can_retry_denied_past_cap() -> None:
     policy = make_policy(max_worker_retries=2)
-    assert policy.can_retry("t1", attempt=2) is False
+    assert policy.can_retry("t1", attempt=3) is False
     assert policy.can_retry("t1", attempt=99) is False
 
 
 def test_zero_retries_allows_single_attempt_only() -> None:
     policy = make_policy(max_worker_retries=0)
     assert policy.can_retry("t1", attempt=0) is False
+    assert policy.can_retry("t1", attempt=1) is False
 
 
 def test_can_escalate_caps_escalations() -> None:
@@ -43,5 +44,5 @@ def test_from_config_reads_retries_section(tmp_path: Path) -> None:
     policy = RetryPolicy.from_config(config)
     assert policy.max_worker_retries == 3
     assert policy.max_manager_escalations == 2
-    assert policy.can_retry("t1", attempt=2) is True
-    assert policy.can_retry("t1", attempt=3) is False
+    assert policy.can_retry("t1", attempt=3) is True
+    assert policy.can_retry("t1", attempt=4) is False

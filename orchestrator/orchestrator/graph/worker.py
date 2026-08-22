@@ -158,11 +158,6 @@ def _run_pipeline(
     return report
 
 
-def worker_node(state: dict) -> dict:
-    """LangGraph node wrapper — wired into the StateGraph in Phase 2."""
-    raise NotImplementedError("Phase 2 wiring")
-
-
 def make_worker_node(
     *,
     store: StateStore,
@@ -183,6 +178,7 @@ def make_worker_node(
 
     async def node(state: dict) -> dict:
         task = Task.model_validate(state["task"])
+        attempt = int(state.get("attempt", 1))
         async with semaphore:
             report = await asyncio.to_thread(
                 run_worker_task,
@@ -193,6 +189,10 @@ def make_worker_node(
                 test_command=test_command,
                 tests_timeout=tests_timeout,
             )
-        return {"reports": [report.model_dump()]}
+        return {
+            "reports": [report.model_dump()],
+            "attempts": {task.id: attempt},
+            "dispatched": [task.id],
+        }
 
     return node
