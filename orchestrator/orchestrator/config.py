@@ -38,9 +38,23 @@ class PathsConfig:
 
 
 @dataclass
+class ConcurrencyConfig:
+    max_workers: int = 3
+    max_managers: int = 2
+
+
+@dataclass
+class RetryConfig:
+    max_worker_retries: int = 2
+    max_manager_escalations: int = 1
+
+
+@dataclass
 class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
+    retries: RetryConfig = field(default_factory=RetryConfig)
     raw: dict = field(default_factory=dict)
 
 
@@ -60,6 +74,8 @@ def load_config(path: Path | None = None) -> Config:
 
     paths_raw = data.get("paths") or {}
     exec_raw = data.get("execution") or {}
+    conc_raw = data.get("concurrency") or {}
+    retries_raw = data.get("retries") or {}
 
     config = Config(
         paths=PathsConfig(
@@ -71,6 +87,16 @@ def load_config(path: Path | None = None) -> Config:
             zcode_command=_as_list(exec_raw.get("zcode_command")) or list(DEFAULT_ZCODE_COMMAND),
             test_command=_as_list(exec_raw.get("test_command")) or list(DEFAULT_TEST_COMMAND),
             worker_timeout_s=float(exec_raw.get("worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S)),
+        ),
+        concurrency=ConcurrencyConfig(
+            max_workers=int(conc_raw.get("max_workers", ConcurrencyConfig.max_workers)),
+            max_managers=int(conc_raw.get("max_managers", ConcurrencyConfig.max_managers)),
+        ),
+        retries=RetryConfig(
+            max_worker_retries=int(retries_raw.get("max_worker_retries", RetryConfig.max_worker_retries)),
+            max_manager_escalations=int(
+                retries_raw.get("max_manager_escalations", RetryConfig.max_manager_escalations)
+            ),
         ),
         raw=data,
     )
