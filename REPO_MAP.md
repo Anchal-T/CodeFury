@@ -11,6 +11,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/.gitignore` — ignores Python caches, .venv, .env, and ephemeral workspaces/data/logs.
 - `orchestrator/config.yaml` — budgets, concurrency caps, model effort mapping, paths, execution settings (worker/test commands).
 - `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
+- `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.

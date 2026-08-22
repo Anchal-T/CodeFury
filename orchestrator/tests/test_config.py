@@ -2,9 +2,17 @@
 
 from pathlib import Path
 
+import pytest
+
 from orchestrator.config import DEFAULT_TEST_COMMAND, load_config
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "config.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ambient ZCODE_CMD (e.g. set for a demo run) out of file-loading tests."""
+    monkeypatch.delenv("ZCODE_CMD", raising=False)
 
 
 def test_loads_real_repo_config() -> None:
