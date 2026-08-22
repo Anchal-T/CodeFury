@@ -12,6 +12,14 @@ retries:
   max_worker_retries: 2
   max_manager_escalations: 1
 
+execution:
+  # Worker command is injectable: config here, or the ZCODE_CMD env var.
+  # A "{prompt}" placeholder is substituted in place; without it the prompt
+  # is appended as the last argument.
+  zcode_command: [zcode]
+  test_command: [python3, -m, pytest, -q]
+  worker_timeout_s: 1800
+
 model_effort:
   simple_task: low
   standard_task: high
