@@ -17,7 +17,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
 - `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/start/status/approve/logs); run drives Phase 1, manage drives the Phase 2 graph.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
-- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override.
+- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models, the only objects crossing levels.
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
@@ -26,7 +26,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 node: per-domain coordination, conflict resolution.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState schema with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol + StaticDecomposer for manager task breakdown.
-- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization.
+- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
 - `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with semaphore concurrency cap.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out and retry routing.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.

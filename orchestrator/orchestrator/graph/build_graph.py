@@ -56,7 +56,10 @@ def build_graph(
                 decision = ReviewDecision(
                     blockers=["manager produced no sub-tasks"], all_done=True
                 )
-                finalize_parent(parent=parent, decision=decision, reports=[], store=store)
+                finalize_parent(
+                    parent=parent, decision=decision, reports=[], store=store,
+                    repo_root=worktrees.repo_root, test_command=test_command,
+                )
                 return {
                     "final_status": parent.status,
                     "blockers": decision.blockers,
@@ -84,7 +87,10 @@ def build_graph(
             "retrying": decision.retry,
         }
         if decision.all_done:
-            finalize_parent(parent=parent, decision=decision, reports=reports, store=store)
+            finalize_parent(
+                parent=parent, decision=decision, reports=reports, store=store,
+                repo_root=worktrees.repo_root, test_command=test_command,
+            )
             update["final_status"] = parent.status
         return update
 

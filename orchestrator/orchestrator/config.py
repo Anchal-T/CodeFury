@@ -100,6 +100,15 @@ def load_config(path: Path | None = None) -> Config:
         ),
         raw=data,
     )
+    if config.concurrency.max_workers < 1:
+        raise ValueError(
+            f"concurrency.max_workers must be >= 1, got {config.concurrency.max_workers}"
+            " (0 would deadlock every worker dispatch)"
+        )
+    if config.concurrency.max_managers < 1:
+        raise ValueError(
+            f"concurrency.max_managers must be >= 1, got {config.concurrency.max_managers}"
+        )
     env_cmd = os.environ.get("ZCODE_CMD")
     if env_cmd:
         config.execution.zcode_command = env_cmd.split()

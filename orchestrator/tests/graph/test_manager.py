@@ -212,3 +212,35 @@ def test_finalize_parent_success_and_failure(store: StateStore) -> None:
     assert not report.tests_passed
     assert report.blockers == ["worker w-2 exhausted retries"]
     assert store.get_task("m-1").status == "failed"
+
+
+def test_finalize_parent_runs_integration_tests_after_merge(
+    git_repo: Path, store: StateStore, python_bin: str
+) -> None:
+    """Individually passing workers can still assemble a broken tree: the
+    manager must test the merged repo root before declaring success."""
+    parent = Task(
+        id="m-1", parent_id=None, level=1, goal="g", deliverable="d",
+        dependencies=[], status="in_progress", assigned_to=None,
+    )
+    store.save_task(parent)
+    from orchestrator.graph.manager import ReviewDecision
+
+    decision = ReviewDecision(merged=["w-1"], retry=[], failed=[], blockers=[], all_done=True)
+
+    passing = [python_bin, "-c", "print('integration ok')"]
+    report = finalize_parent(
+        parent=parent, decision=decision, reports=[], store=store,
+        repo_root=git_repo, test_command=passing,
+    )
+    assert report.tests_passed
+    assert store.get_task("m-1").status == "review"
+
+    failing = [python_bin, "-c", "raise SystemExit(1)"]
+    report = finalize_parent(
+        parent=parent, decision=decision, reports=[], store=store,
+        repo_root=git_repo, test_command=failing,
+    )
+    assert not report.tests_passed
+    assert any("integration" in b for b in report.blockers)
+    assert store.get_task("m-1").status == "failed"

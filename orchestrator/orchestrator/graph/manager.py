@@ -6,10 +6,12 @@ lives in build_graph; the review logic is kept pure and injectable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from orchestrator.contracts import Report, Task
 from orchestrator.execution.worktree_manager import WorktreeManager
 from orchestrator.governance.retry_policy import RetryPolicy
+from orchestrator.graph.worker import run_tests
 from orchestrator.memory.store import StateStore
 
 
@@ -79,22 +81,38 @@ def finalize_parent(
     decision: ReviewDecision,
     reports: list[Report],
     store: StateStore,
+    repo_root: Path | None = None,
+    test_command: list[str] | None = None,
 ) -> Report:
-    """Persist the parent task's final status and its aggregate Report."""
-    ok = decision.all_done and not decision.failed and not decision.blockers
+    """Persist the parent task's final status and its aggregate Report.
+
+    When repo_root and test_command are provided and the merged outcome is
+    otherwise OK, the test command runs once against the assembled repo
+    root: workers test in isolation, so individually passing branches can
+    still combine into a broken integrated tree (plan §9 review gate).
+    """
+    blockers = list(decision.blockers)
+    summary = (
+        f"{len(decision.merged)} merged, {len(decision.failed)} failed, "
+        f"{len(decision.retry)} retrying"
+    )
+    ok = decision.all_done and not decision.failed and not blockers
+    if ok and repo_root is not None and test_command is not None:
+        integration = run_tests(test_command, cwd=repo_root)
+        if not integration.passed:
+            blockers.append("integration tests failed after merge")
+            summary = f"{summary}; integration test output tail:\n{integration.output[-500:]}"
+            ok = False
     parent.status = "review" if ok else "failed"
     store.save_task(parent)
     report = Report(
         task_id=parent.id,
         agent=f"manager:{parent.id}",
-        summary=(
-            f"{len(decision.merged)} merged, {len(decision.failed)} failed, "
-            f"{len(decision.retry)} retrying"
-        ),
+        summary=summary,
         diff_ref=None,
         tests_passed=ok,
         tokens_used=sum(r.tokens_used for r in reports),
-        blockers=list(decision.blockers),
+        blockers=blockers,
     )
     store.save_report(report)
     return report

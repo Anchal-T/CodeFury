@@ -174,6 +174,8 @@ def make_worker_node(
     it. The blocking pipeline runs in a thread so one implementation serves
     both the CLI and the graph.
     """
+    if max_workers < 1:
+        raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
     semaphore = asyncio.Semaphore(max_workers)
 
     async def node(state: dict) -> dict:

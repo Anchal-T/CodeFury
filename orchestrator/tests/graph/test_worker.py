@@ -273,6 +273,18 @@ def test_worker_node_returns_report_and_persists(
         store.close()
 
 
+def test_make_worker_node_rejects_non_positive_max_workers() -> None:
+    """A Semaphore(0) would silently deadlock every dispatch — reject it."""
+    with pytest.raises(ValueError):
+        make_worker_node(
+            store=None,  # type: ignore[arg-type] — validation fires before use
+            worktrees=None,  # type: ignore[arg-type]
+            runner=None,  # type: ignore[arg-type]
+            test_command=[],
+            max_workers=0,
+        )
+
+
 def test_worker_node_semaphore_caps_concurrency(
     git_repo: Path, tmp_path: Path, python_bin: str
 ) -> None:
