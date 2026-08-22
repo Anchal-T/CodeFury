@@ -38,6 +38,7 @@ def cli() -> None:
 def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Path) -> None:
     """Run one Task through the Phase 1 single-worker loop."""
     config = load_config(config_path)
+    base = config_path.resolve().parent
     repo_root = find_repo_root(Path.cwd())
     task = Task(
         id=task_id or f"task-{uuid4().hex[:8]}",
@@ -53,8 +54,10 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
         command=config.execution.zcode_command,
         timeout=config.execution.worker_timeout_s,
     )
-    worktrees = WorktreeManager(repo_root, repo_root / config.paths.workspaces)
-    with StateStore(repo_root / config.paths.db) as store:
+    # Relative paths in config.yaml resolve against the config file's
+    # directory (base), so runtime artifacts stay under orchestrator/.
+    worktrees = WorktreeManager(repo_root, base / config.paths.workspaces)
+    with StateStore(base / config.paths.db) as store:
         store.init_schema()
         click.echo(f"[run] task {task.id} → worker loop (repo: {repo_root})")
         report = run_worker_task(
