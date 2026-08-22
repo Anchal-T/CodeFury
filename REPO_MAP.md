@@ -9,24 +9,32 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator-build-plan.md` — architecture & phased build plan (untracked, local-only).
 - `orchestrator/.env.example` — template for secrets (Z_AI_API_KEY).
 - `orchestrator/.gitignore` — ignores Python caches, .venv, .env, and ephemeral workspaces/data/logs.
-- `orchestrator/config.yaml` — budgets, concurrency caps, model effort mapping, paths.
-- `orchestrator/conftest.py` — puts the orchestrator project dir on sys.path for pytest.
+- `orchestrator/config.yaml` — budgets, concurrency caps, model effort mapping, paths, execution settings (worker/test commands).
+- `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
+- `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (start/status/approve/logs).
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/start/status/approve/logs); run drives the Phase 1 loop.
+- `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
+- `orchestrator/orchestrator/config.py` — typed config.yaml loader with ZCODE_CMD env override.
+- `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models, the only objects crossing levels.
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 node: epic ownership, human interaction.
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 node: per-domain coordination, conflict resolution.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 node: worker fan-out, merge gating, retries.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 node: one ZCode subprocess per task.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline: run_worker_task executes Task → worktree → agent subprocess → tests → Report in SQLite.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires all levels into one LangGraph StateGraph.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
-- `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform ZCode CLI subprocess wrapper.
-- `orchestrator/orchestrator/execution/worktree_manager.py` — git worktree add/merge/discard/cleanup.
+- `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
+- `orchestrator/orchestrator/execution/worktree_manager.py` — git worktree create/commit/diff/merge/discard/cleanup plus repo-root discovery.
+- `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
+- `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store + LangGraph SqliteSaver.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store: tasks/reports/agents/checkpoints/token_usage tables + typed round-trips.
+- `orchestrator/tests/memory/test_store.py` — schema, WAL mode, task/report round-trip tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
 - `orchestrator/orchestrator/memory/knowledge_docs.py` — append-only markdown knowledge files (Tier 1).
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
@@ -36,3 +44,6 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/domains/backend/repo_map.md` — backend domain knowledge (Domain Lead-maintained).
 - `orchestrator/domains/infra/repo_map.md` — infra domain knowledge (Domain Lead-maintained).
 - `orchestrator/tests/test_scaffold.py` — smoke test: all stub modules import.
+- `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override.
+- `orchestrator/tests/test_prompts.py` — worker prompt content tests.
+- `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests: happy path, failing tests, timeout, BLOCKED.md.
