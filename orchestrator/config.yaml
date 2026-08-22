@@ -1,0 +1,23 @@
+concurrency:
+  max_workers: 3          # tune to your laptop's free RAM
+  max_managers: 2
+
+budgets:
+  worker_tokens: 50000
+  manager_tokens: 150000
+  domain_lead_tokens: 300000
+  architect_tokens: 500000
+
+retries:
+  max_worker_retries: 2
+  max_manager_escalations: 1
+
+model_effort:
+  simple_task: low
+  standard_task: high
+  hard_task: max
+
+paths:
+  workspaces: ./workspaces
+  domains: ./domains
+  db: ./data/orchestrator.db

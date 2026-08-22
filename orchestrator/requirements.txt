@@ -1,0 +1,15 @@
+# Core
+langgraph
+langgraph-checkpoint-sqlite   # SqliteSaver checkpointer for LangGraph
+pydantic
+pyyaml
+psutil
+click
+python-dotenv
+
+# Dev
+pytest
+
+# Optional Tier-3 semantic memory (Phase 7) — only if keyword/markdown search stops being enough
+# fastembed
+# numpy
