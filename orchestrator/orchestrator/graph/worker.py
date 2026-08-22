@@ -7,6 +7,7 @@ manager are all injected, so the loop is unit-testable without a real LLM.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -157,6 +158,43 @@ def _run_pipeline(
     return report
 
 
-def worker_node(state: dict) -> dict:
-    """LangGraph node wrapper — wired into the StateGraph in Phase 2."""
-    raise NotImplementedError("Phase 2")
+def make_worker_node(
+    *,
+    store: StateStore,
+    worktrees: WorktreeManager,
+    runner: ZCodeRunner,
+    test_command: list[str],
+    max_workers: int = 3,
+    tests_timeout: float = TEST_TIMEOUT_S,
+):
+    """Build the async LangGraph worker node with a concurrency cap.
+
+    The semaphore enforces config concurrency.max_workers (plan §4): never
+    more worker subprocesses than the budget allows, real parallelism below
+    it. The blocking pipeline runs in a thread so one implementation serves
+    both the CLI and the graph.
+    """
+    if max_workers < 1:
+        raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
+    semaphore = asyncio.Semaphore(max_workers)
+
+    async def node(state: dict) -> dict:
+        task = Task.model_validate(state["task"])
+        attempt = int(state.get("attempt", 1))
+        async with semaphore:
+            report = await asyncio.to_thread(
+                run_worker_task,
+                task,
+                store=store,
+                worktrees=worktrees,
+                runner=runner,
+                test_command=test_command,
+                tests_timeout=tests_timeout,
+            )
+        return {
+            "reports": [report.model_dump()],
+            "attempts": {task.id: attempt},
+            "dispatched": [task.id],
+        }
+
+    return node

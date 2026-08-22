@@ -13,37 +13,46 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
-- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing (dev utility, not imported by the package).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing, with FAKE_WORKER_FAIL=1 failure mode (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/start/status/approve/logs); run drives the Phase 1 loop.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/start/status/approve/logs); run drives Phase 1, manage drives the Phase 2 graph.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
-- `orchestrator/orchestrator/config.py` — typed config.yaml loader with ZCODE_CMD env override.
+- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models, the only objects crossing levels.
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 node: epic ownership, human interaction.
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 node: per-domain coordination, conflict resolution.
-- `orchestrator/orchestrator/graph/manager.py` — Level 1 node: worker fan-out, merge gating, retries.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline: run_worker_task executes Task → worktree → agent subprocess → tests → Report in SQLite.
-- `orchestrator/orchestrator/graph/build_graph.py` — wires all levels into one LangGraph StateGraph.
+- `orchestrator/orchestrator/graph/state.py` — OrchestratorState schema with fan-out-safe reducers (append lists, max-merge attempts).
+- `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol + StaticDecomposer for manager task breakdown.
+- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with semaphore concurrency cap.
+- `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out and retry routing.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
 - `orchestrator/orchestrator/execution/worktree_manager.py` — git worktree create/commit/diff/merge/discard/cleanup plus repo-root discovery.
 - `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store: tasks/reports/agents/checkpoints/token_usage tables + typed round-trips.
-- `orchestrator/tests/memory/test_store.py` — schema, WAL mode, task/report round-trip tests.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe: tasks/reports/agents/checkpoints/token_usage + typed round-trips.
+- `orchestrator/tests/memory/test_store.py` — schema, WAL mode, round-trip and thread-safety tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
 - `orchestrator/orchestrator/memory/knowledge_docs.py` — append-only markdown knowledge files (Tier 1).
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
 - `orchestrator/orchestrator/governance/budget.py` — per-level token budget tracking and hard caps.
-- `orchestrator/orchestrator/governance/retry_policy.py` — retry/escalation caps.
+- `orchestrator/orchestrator/governance/retry_policy.py` — enforced retry caps (max_worker_retries + 1 total attempts) and escalation limits.
 - `orchestrator/domains/PROJECT_STATE.md` — epic-level project state (Architect-maintained).
 - `orchestrator/domains/backend/repo_map.md` — backend domain knowledge (Domain Lead-maintained).
 - `orchestrator/domains/infra/repo_map.md` — infra domain knowledge (Domain Lead-maintained).
 - `orchestrator/tests/test_scaffold.py` — smoke test: all stub modules import.
 - `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override.
 - `orchestrator/tests/test_prompts.py` — worker prompt content tests.
-- `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests: happy path, failing tests, timeout, BLOCKED.md.
+- `orchestrator/tests/test_main.py` — manage CLI end-to-end test via CliRunner.
+- `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode.
+- `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
+- `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests + async worker node and semaphore cap tests.
+- `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer child-task tests.
+- `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
+- `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
+- `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition.

@@ -1,11 +1,12 @@
-"""CLI entrypoint: orchestrator start | status | approve | logs | run (plan §3.7).
+"""CLI entrypoint: orchestrator start | status | approve | logs | run | manage (plan §3.7).
 
-``run`` is the Phase 1 single-worker loop driver: it builds a Task from the
-goal, executes it through the worker pipeline, and prints the Report.
+``run`` drives the Phase 1 single-worker loop; ``manage`` drives the Phase 2
+Manager graph with parallel worker fan-out, merge gating, and retry caps.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,9 @@ from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
 from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.governance.retry_policy import RetryPolicy
+from orchestrator.graph.build_graph import build_graph
+from orchestrator.graph.decompose import StaticDecomposer
 from orchestrator.graph.worker import run_worker_task
 from orchestrator.memory.store import StateStore
 
@@ -76,6 +80,64 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
         f"  summary:      {report.summary.splitlines()[0] if report.summary else ''}"
     )
     if not report.tests_passed:
+        raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--goal", required=True, help="What the manager's workers should achieve together.")
+@click.option(
+    "--sub-goal", "sub_goals", multiple=True, required=True, help="One worker goal per flag."
+)
+@click.option("--task-id", default=None, help="Stable manager task id (default: generated).")
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_path: Path) -> None:
+    """Run a Manager task: fan workers out, review, merge or retry (Phase 2)."""
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    repo_root = find_repo_root(Path.cwd())
+    parent = Task(
+        id=task_id or f"mgr-{uuid4().hex[:8]}",
+        parent_id=None,
+        level=1,
+        goal=goal,
+        deliverable=goal,
+        dependencies=[],
+        status="pending",
+        assigned_to=None,
+    )
+    with StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        graph = build_graph(
+            store=store,
+            worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
+            runner=ZCodeRunner(
+                command=config.execution.zcode_command,
+                timeout=config.execution.worker_timeout_s,
+            ),
+            decomposer=StaticDecomposer(list(sub_goals)),
+            retry_policy=RetryPolicy.from_config(config),
+            test_command=config.execution.test_command,
+            max_workers=config.concurrency.max_workers,
+        )
+        click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
+        result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))
+
+    final = result.get("final_status", "unknown")
+    attempts = result.get("attempts", {})
+    merged = result.get("merged", [])
+    click.echo(
+        f"\n[manager report] final={final}\n"
+        f"  merged:   {merged or 'none'}\n"
+        f"  attempts: {attempts or 'none'}\n"
+        f"  blockers: {result.get('blockers') or 'none'}"
+    )
+    if final != "review":
         raise SystemExit(1)
 
 

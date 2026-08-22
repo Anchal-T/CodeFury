@@ -52,3 +52,14 @@ def test_env_var_overrides_command(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ZCODE_CMD", "python3 scripts/fake_worker.py")
     config = load_config(tmp_path / "missing.yaml")
     assert config.execution.zcode_command == ["python3", "scripts/fake_worker.py"]
+
+
+def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:
+    """max_workers: 0 would deadlock every dispatch (Semaphore(0) is never
+    acquirable) — invalid configuration must fail fast at load time."""
+    import pytest
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("concurrency:\n  max_workers: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(config_file)

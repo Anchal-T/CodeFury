@@ -81,6 +81,31 @@ def test_merge_brings_changes_into_repo(manager: WorktreeManager, git_repo: Path
     assert (git_repo / "merged.txt").read_text(encoding="utf-8") == "data\n"
 
 
+def test_failed_merge_aborts_and_leaves_repo_clean(manager: WorktreeManager, git_repo: Path) -> None:
+    """A conflicted merge must not leave MERGE_HEAD dangling: the repo stays
+    clean so subsequent merges (other workers) still work."""
+    manager.create("w6")
+    (manager.worktree_path("w6") / "conflict.txt").write_text("worker version\n", encoding="utf-8")
+    manager.commit("w6", "worker change")
+    (git_repo / "conflict.txt").write_text("base version\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=git_repo)
+    _git(["commit", "-m", "base change"], cwd=git_repo)
+
+    with pytest.raises(RuntimeError):
+        manager.merge("w6")
+
+    status = _git(["status", "--porcelain"], cwd=git_repo)
+    assert "UU" not in status, "no unmerged paths may remain"
+    assert not (git_repo / ".git" / "MERGE_HEAD").exists()
+
+    # A later worker must still be able to merge cleanly.
+    manager.create("w7")
+    (manager.worktree_path("w7") / "later.txt").write_text("later\n", encoding="utf-8")
+    manager.commit("w7", "later change")
+    manager.merge("w7")
+    assert (git_repo / "later.txt").read_text(encoding="utf-8") == "later\n"
+
+
 def test_discard_removes_worktree_and_branch(manager: WorktreeManager, git_repo: Path) -> None:
     manager.create("w3")
     manager.discard("w3")
