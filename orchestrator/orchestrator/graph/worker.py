@@ -26,18 +26,30 @@ SUMMARY_MAX_CHARS = 500
 class TestResult:
     passed: bool
     output: str
+    timed_out: bool = False
 
 
-def run_tests(test_command: list[str], cwd: Path) -> TestResult:
-    """Run the test command in the worktree (list-form, shell=False)."""
-    proc = subprocess.run(
-        test_command,
-        cwd=str(cwd),
-        shell=False,
-        capture_output=True,
-        text=True,
-        timeout=TEST_TIMEOUT_S,
-    )
+def run_tests(test_command: list[str], cwd: Path, timeout: float = TEST_TIMEOUT_S) -> TestResult:
+    """Run the test command in the worktree (list-form, shell=False).
+
+    A timeout is a test failure, not an exception: the caller must always
+    get a TestResult so a Report can be persisted.
+    """
+    try:
+        proc = subprocess.run(
+            test_command,
+            cwd=str(cwd),
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return TestResult(
+            passed=False,
+            output=f"tests timed out after {timeout:.0f}s",
+            timed_out=True,
+        )
     output = (proc.stdout or "") + (proc.stderr or "")
     passed = proc.returncode in (0, PYTEST_NO_TESTS_EXIT_CODE)
     return TestResult(passed=passed, output=output.strip())
@@ -62,7 +74,9 @@ def _blockers(result: RunnerResult, tests: TestResult, worktree: Path) -> list[s
         blockers.append("worker subprocess timed out")
     elif result.returncode != 0:
         blockers.append(f"worker subprocess exited with code {result.returncode}")
-    if not tests.passed:
+    if tests.timed_out:
+        blockers.append("tests timed out in worktree")
+    elif not tests.passed:
         blockers.append("tests failed in worktree")
     if (worktree / "BLOCKED.md").is_file():
         blockers.append("worker wrote BLOCKED.md")
@@ -76,19 +90,53 @@ def run_worker_task(
     worktrees: WorktreeManager,
     runner: ZCodeRunner,
     test_command: list[str],
+    tests_timeout: float = TEST_TIMEOUT_S,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
-    The task moves pending → in_progress → review (success) or failed; the
-    worker's changes are committed to the worker branch and left there for
-    review — merging is a Phase 2 Manager decision.
+    The task moves pending → in_progress → review (success) or failed, and a
+    Report is ALWAYS saved — even when the pipeline itself crashes — so a
+    task is never left in_progress with no trace of what happened.
     """
     task.status = "in_progress"
     store.save_task(task)
+    try:
+        return _run_pipeline(
+            task,
+            store=store,
+            worktrees=worktrees,
+            runner=runner,
+            test_command=test_command,
+            tests_timeout=tests_timeout,
+        )
+    except Exception as exc:
+        report = Report(
+            task_id=task.id,
+            agent=f"worker:{task.id}",
+            summary=f"pipeline error: {exc!r}",
+            diff_ref=None,
+            tests_passed=False,
+            tokens_used=0,
+            blockers=[f"pipeline error: {exc}"],
+        )
+        store.save_report(report)
+        task.status = "failed"
+        store.save_task(task)
+        return report
 
+
+def _run_pipeline(
+    task: Task,
+    *,
+    store: StateStore,
+    worktrees: WorktreeManager,
+    runner: ZCodeRunner,
+    test_command: list[str],
+    tests_timeout: float,
+) -> Report:
     worktree = worktrees.create(task.id)
     result = runner.run(build_worker_prompt(task), cwd=worktree)
-    tests = run_tests(test_command, cwd=worktree)
+    tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
     worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
 
     blockers = _blockers(result, tests, worktree)

@@ -143,3 +143,78 @@ def test_blocked_marker_becomes_blocker(git_repo: Path, tmp_path: Path, python_b
         assert store.get_task("t-42").status == "failed"
     finally:
         store.close()
+
+
+def test_test_timeout_saves_failed_report(git_repo: Path, tmp_path: Path, python_bin: str) -> None:
+    """A hung test run must produce a failed Report, not a stuck task."""
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+        hanging_tests = [python_bin, "-c", "import time; time.sleep(60)"]
+        report = run_worker_task(
+            make_task(),
+            store=store,
+            worktrees=worktrees,
+            runner=runner,
+            test_command=hanging_tests,
+            tests_timeout=1.0,
+        )
+        assert not report.tests_passed
+        assert "tests timed out in worktree" in report.blockers
+        assert store.get_task("t-42").status == "failed"
+        assert store.latest_report("t-42") == report
+    finally:
+        store.close()
+
+
+def test_pipeline_crash_saves_failed_report(git_repo: Path, tmp_path: Path) -> None:
+    """An unexpected pipeline exception must still persist a failed Report."""
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+
+        class CrashingRunner(ZCodeRunner):
+            def run(self, prompt: str, cwd: Path):
+                raise RuntimeError("boom")
+
+        report = run_worker_task(
+            make_task(),
+            store=store,
+            worktrees=worktrees,
+            runner=CrashingRunner(),
+            test_command=["anything"],
+        )
+        assert not report.tests_passed
+        assert any(b.startswith("pipeline error") for b in report.blockers)
+        assert "boom" in report.summary
+        assert store.get_task("t-42").status == "failed"
+        assert store.latest_report("t-42") == report
+    finally:
+        store.close()
+
+
+def test_retry_same_task_id_gets_fresh_worktree(git_repo: Path, tmp_path: Path, python_bin: str) -> None:
+    """Retrying a failed task under the same id must succeed end-to-end."""
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+        failing = [python_bin, "-c", "raise SystemExit(1)"]
+        passing = [python_bin, "-c", "print('tests ok')"]
+
+        first = run_worker_task(
+            make_task(), store=store, worktrees=worktrees, runner=runner, test_command=failing
+        )
+        assert not first.tests_passed
+
+        second = run_worker_task(
+            make_task(), store=store, worktrees=worktrees, runner=runner, test_command=passing
+        )
+        assert second.tests_passed
+        assert store.get_task("t-42").status == "review"
+    finally:
+        store.close()
