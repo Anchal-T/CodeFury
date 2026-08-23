@@ -1,5 +1,6 @@
 """Tests for orchestrator.execution.worktree_manager against a temp git repo."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -161,7 +162,7 @@ def test_discard_tolerates_never_created_or_already_removed(
 
 def test_cleanup_prunes_stale_worktrees(manager: WorktreeManager, git_repo: Path) -> None:
     path = manager.create("w4")
-    subprocess.run(["rm", "-rf", str(path)], check=True)
+    shutil.rmtree(path)  # stdlib: portable (rm -rf is Unix-only)
     manager.cleanup()
     assert "worker_w4" not in _git(["worktree", "list"], cwd=git_repo)
 
@@ -170,5 +171,8 @@ def test_find_repo_root(git_repo: Path) -> None:
     nested = git_repo / "a" / "b"
     nested.mkdir(parents=True)
     assert find_repo_root(nested) == git_repo.resolve()
+    outside = (nested.parents[1] / ".." / "..").resolve()
+    if any((candidate / ".git").exists() for candidate in (outside, *outside.parents)):
+        pytest.skip("temporary directory is nested inside another git repository")
     with pytest.raises(RuntimeError):
-        find_repo_root(nested.parents[1] / ".." / "..")
+        find_repo_root(outside)
