@@ -25,7 +25,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 node: epic ownership, human interaction.
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 node: per-domain coordination, conflict resolution.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState schema with fan-out-safe reducers (append lists, max-merge attempts).
-- `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol + StaticDecomposer for manager task breakdown.
+- `orchestrator/orchestrator/graph/decompose.py` — Decomposer + DomainDecomposer protocols; StaticDecomposer (level 0) and StaticDomainDecomposer (level 1) breakdowns.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
 - `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with semaphore concurrency cap.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out and retry routing.
@@ -47,13 +47,14 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/domains/backend/repo_map.md` — backend domain knowledge (Domain Lead-maintained).
 - `orchestrator/domains/infra/repo_map.md` — infra domain knowledge (Domain Lead-maintained).
 - `orchestrator/tests/test_scaffold.py` — smoke test: all stub modules import.
+- `orchestrator/tests/test_contracts.py` — Task/Report contract tests: domain field, conflict-blocker convention.
 - `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override.
 - `orchestrator/tests/test_prompts.py` — worker prompt content tests.
 - `orchestrator/tests/test_main.py` — manage CLI end-to-end test via CliRunner.
 - `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode.
 - `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
 - `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests + async worker node and semaphore cap tests.
-- `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer child-task tests.
+- `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer and StaticDomainDecomposer child-task tests.
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
 - `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
 - `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition.

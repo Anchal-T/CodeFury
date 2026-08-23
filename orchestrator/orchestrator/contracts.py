@@ -22,6 +22,7 @@ class Task(BaseModel):
     dependencies: list[str] = []
     status: Literal["pending", "in_progress", "review", "done", "failed"]
     assigned_to: str | None = None
+    domain: str | None = None
 
 
 class Report(BaseModel):
