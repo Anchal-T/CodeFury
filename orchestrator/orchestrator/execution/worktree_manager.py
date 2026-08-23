@@ -119,9 +119,19 @@ class WorktreeManager:
         return proc.returncode == 0
 
     def diff_stat(self, worker_id: str) -> str:
-        """One-line-per-file diff summary of the worker branch vs its base."""
+        """One-line-per-file diff summary of the worker branch vs its base.
+
+        Runs against repo_root so the merge base is the fork point from the
+        integration branch (inside the worktree, HEAD *is* the worker
+        branch), and includes every commit the worker made.
+        """
+        branch = self.branch_name(worker_id)
+        base = self._require(
+            self._git(["merge-base", "HEAD", branch], cwd=self.repo_root),
+            "merge-base",
+        ).strip()
         return self._require(
-            self._git(["diff", "--stat", "HEAD~1..HEAD"], cwd=self.worktree_path(worker_id)),
+            self._git(["diff", "--stat", f"{base}..{branch}"], cwd=self.repo_root),
             "diff --stat",
         ).strip()
 

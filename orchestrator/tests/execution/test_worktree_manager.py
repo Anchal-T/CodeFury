@@ -75,6 +75,21 @@ def test_commit_and_diff_stat(manager: WorktreeManager) -> None:
     assert manager.commit("w1", "nothing new") is False
 
 
+def test_diff_stat_covers_all_worker_commits(manager: WorktreeManager) -> None:
+    """diff_stat must summarize the worker branch vs its merge base — not
+    just the most recent commit."""
+    manager.create("w1b")
+    path = manager.worktree_path("w1b")
+    (path / "first.py").write_text("one\n", encoding="utf-8")
+    manager.commit("w1b", "first commit")
+    (path / "second.py").write_text("two\n", encoding="utf-8")
+    manager.commit("w1b", "second commit")
+
+    stat = manager.diff_stat("w1b")
+    assert "first.py" in stat, "earlier worker commits must not be omitted"
+    assert "second.py" in stat
+
+
 def test_merge_brings_changes_into_repo(manager: WorktreeManager, git_repo: Path) -> None:
     manager.create("w2")
     (manager.worktree_path("w2") / "merged.txt").write_text("data\n", encoding="utf-8")
