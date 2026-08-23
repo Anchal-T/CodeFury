@@ -150,6 +150,17 @@ def test_discard_removes_worktree_and_branch(manager: WorktreeManager, git_repo:
     assert "orchestrator/worker-w3" not in _git(["branch", "--list"], cwd=git_repo)
 
 
+def test_discard_tolerates_never_created_or_already_removed(
+    manager: WorktreeManager,
+) -> None:
+    """Teardown is best-effort: partial create() failures and double-discards
+    must not raise or leak the branch."""
+    manager.discard("ghost")          # never created
+    manager.create("w3b")
+    manager.discard("w3b")
+    manager.discard("w3b")            # already removed
+
+
 def test_cleanup_prunes_stale_worktrees(manager: WorktreeManager, git_repo: Path) -> None:
     path = manager.create("w4")
     subprocess.run(["rm", "-rf", str(path)], check=True)

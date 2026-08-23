@@ -8,16 +8,21 @@ subprocess invocations with shell=False so this works on Linux and Windows.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _BRANCH_PREFIX = "orchestrator/worker-"
 # Characters that are invalid in Windows paths or problematic in branch names.
 _INVALID_CHARS = '<>:"\\|?*'
 # git stderr lines like: CONFLICT (content): Merge conflict in src/app.py
 _CONFLICT_LINE_RE = re.compile(r"^CONFLICT \([^)]+\): (.+)$")
+#: A hung git call must not pin a worker-concurrency slot forever.
+GIT_TIMEOUT_S = 300.0
 
 
 class MergeConflictError(RuntimeError):
@@ -64,13 +69,19 @@ class WorktreeManager:
         self.workspaces_dir = workspaces_dir
 
     def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", *args],
-            cwd=str(cwd),
-            shell=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(
+                f"git {' '.join(args)} timed out after {GIT_TIMEOUT_S:.0f}s"
+            ) from err
 
     def _require(self, proc: subprocess.CompletedProcess[str], action: str) -> str:
         if proc.returncode != 0:
@@ -97,6 +108,12 @@ class WorktreeManager:
             remove = self._git(["worktree", "remove", "--force", str(path)], cwd=self.repo_root)
             if remove.returncode != 0:
                 shutil.rmtree(path, ignore_errors=True)
+                if path.exists():
+                    logger.warning(
+                        "could not clear stale worktree %s: git=%r; manual cleanup may be needed",
+                        path,
+                        remove.stderr.strip(),
+                    )
             self._git(["worktree", "prune"], cwd=self.repo_root)
         listing = self._git(["branch", "--list", branch], cwd=self.repo_root)
         if listing.stdout.strip():
@@ -109,14 +126,16 @@ class WorktreeManager:
         """Stage and commit all changes in the worker's worktree.
 
         Returns True when a commit was created, False when there was nothing
-        to commit.
+        to commit. The empty check runs `git status --porcelain`, which is
+        locale-independent (unlike matching localized "nothing to commit").
         """
         path = self.worktree_path(worker_id)
+        status = self._git(["status", "--porcelain"], cwd=path)
+        if not status.stdout.strip():
+            return False
         self._require(self._git(["add", "-A"], cwd=path), "add")
-        proc = self._git(["commit", "-m", message], cwd=path)
-        if proc.returncode != 0 and "nothing to commit" not in (proc.stdout + proc.stderr):
-            raise RuntimeError(f"git commit failed: {(proc.stderr or proc.stdout).strip()}")
-        return proc.returncode == 0
+        self._require(self._git(["commit", "-m", message], cwd=path), "commit")
+        return True
 
     def diff_stat(self, worker_id: str) -> str:
         """One-line-per-file diff summary of the worker branch vs its base.
@@ -159,15 +178,17 @@ class WorktreeManager:
             raise RuntimeError(f"git merge failed ({proc.returncode}): {detail}")
 
     def discard(self, worker_id: str) -> None:
-        """Drop the worker's worktree and branch."""
-        self._require(
-            self._git(["worktree", "remove", "--force", str(self.worktree_path(worker_id))], cwd=self.repo_root),
-            "worktree remove",
+        """Drop the worker's worktree and branch.
+
+        Best-effort teardown: tolerates state that is already gone (never
+        created, partially created, or previously discarded) instead of
+        raising — callers should not need defensive try/except around cleanup.
+        """
+        self._git(
+            ["worktree", "remove", "--force", str(self.worktree_path(worker_id))],
+            cwd=self.repo_root,
         )
-        self._require(
-            self._git(["branch", "-D", self.branch_name(worker_id)], cwd=self.repo_root),
-            "branch -D",
-        )
+        self._git(["branch", "-D", self.branch_name(worker_id)], cwd=self.repo_root)
 
     def cleanup(self) -> None:
         """Prune stale worktree metadata under workspaces_dir."""
