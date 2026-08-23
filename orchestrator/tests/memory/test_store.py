@@ -1,6 +1,5 @@
 """Tests for orchestrator.memory.store (SQLite WAL persistence)."""
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,7 @@ def make_report(task_id: str = "t1") -> Report:
         task_id=task_id,
         agent=f"worker:{task_id}",
         summary="done",
-        diff_ref="orchestrator/worker-t1",
+        diff_ref=f"orchestrator/worker-{task_id}",
         tests_passed=True,
         tokens_used=0,
         blockers=[],

@@ -1,6 +1,5 @@
 """Tests for orchestrator.config."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -16,13 +15,33 @@ def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ZCODE_CMD", raising=False)
 
 
-def test_loads_real_repo_config() -> None:
-    config = load_config(REPO_CONFIG)
-    assert config.execution.zcode_command == ["zcode"]
-    assert config.execution.test_command == [sys.executable, "-m", "pytest", "-q"]
-    assert config.execution.worker_timeout_s == 1800
-    assert config.paths.db == Path("./data/orchestrator.db")
-    assert config.paths.workspaces == Path("./workspaces")
+def test_committed_config_parses() -> None:
+    """Smoke-check only: the committed config.yaml is a tuned deployment
+    artifact — its operational values must not be pinned here."""
+    assert load_config(REPO_CONFIG).raw
+
+
+def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
+    """Loader behavior verified against a dedicated fixture, decoupled from
+    the repo's tunable config.yaml."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "execution:\n"
+        "  zcode_command: [/usr/bin/python3, agent.py]\n"
+        "  worker_timeout_s: 60\n"
+        "paths:\n"
+        "  db: ./custom.db\n"
+        "  workspaces: ./ws\n"
+        "retries:\n"
+        "  max_worker_retries: 1\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.zcode_command == ["/usr/bin/python3", "agent.py"]
+    assert config.execution.worker_timeout_s == 60.0
+    assert config.paths.db == Path("./custom.db")
+    assert config.paths.workspaces == Path("./ws")
+    assert config.retries.max_worker_retries == 1
 
 
 def test_missing_file_falls_back_to_defaults() -> None:
@@ -103,8 +122,6 @@ def test_missing_config_path_stays_silent(tmp_path: Path, caplog) -> None:
 def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:
     """max_workers: 0 would deadlock every dispatch (Semaphore(0) is never
     acquirable) — invalid configuration must fail fast at load time."""
-    import pytest
-
     config_file = tmp_path / "config.yaml"
     config_file.write_text("concurrency:\n  max_workers: 0\n", encoding="utf-8")
     with pytest.raises(ValueError):
