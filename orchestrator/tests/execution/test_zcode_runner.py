@@ -71,8 +71,8 @@ def test_timeout_kills_process_tree(tmp_path: Path, python_bin: str) -> None:
     # working tree-kill must reap both so communicate() can return.
     sleeper = (
         "import subprocess, sys, time\n"
-        "subprocess.run([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-        "time.sleep(60)\n"
+        "subprocess.run([sys.executable, '-c', 'import time; time.sleep(10)'])\n"
+        "time.sleep(10)\n"
     )
     runner = ZCodeRunner(command=[python_bin, "-c", sleeper], timeout=1.0)
     start = time.monotonic()
@@ -81,3 +81,22 @@ def test_timeout_kills_process_tree(tmp_path: Path, python_bin: str) -> None:
     assert result.timed_out
     assert not result.ok
     assert elapsed < 30, "process tree was not killed promptly"
+
+
+def test_timeout_reaps_sigterm_ignoring_tree(tmp_path: Path, python_bin: str) -> None:
+    """Processes that ignore SIGTERM must still be reaped within the grace
+    budget — run() always returns a RunnerResult, never hangs forever."""
+    stubborn = (
+        "import signal, subprocess, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "subprocess.run([sys.executable, '-c', "
+        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'])\n"
+        "time.sleep(30)\n"
+    )
+    runner = ZCodeRunner(command=[python_bin, "-c", stubborn], timeout=1.0)
+    start = time.monotonic()
+    result = runner.run("x", cwd=tmp_path)
+    elapsed = time.monotonic() - start
+    assert result.timed_out
+    assert not result.ok
+    assert elapsed < 30, "SIGTERM-ignoring tree was not reaped promptly"
