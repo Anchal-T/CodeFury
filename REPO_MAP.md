@@ -38,7 +38,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe: tasks/reports/agents/checkpoints/token_usage + typed round-trips.
 - `orchestrator/tests/memory/test_store.py` — schema, WAL mode, round-trip and thread-safety tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
-- `orchestrator/orchestrator/memory/knowledge_docs.py` — append-only markdown knowledge files (Tier 1).
+- `orchestrator/orchestrator/memory/knowledge_docs.py` — Tier-1 markdown knowledge docs: read_latest + append-only UTC-timestamped sections.
+- `orchestrator/tests/memory/test_knowledge_docs.py` — knowledge docs tests: missing-file reads, timestamped appends, history preservation.
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
 - `orchestrator/orchestrator/governance/budget.py` — per-level token budget tracking and hard caps.
 - `orchestrator/orchestrator/governance/retry_policy.py` — enforced retry caps (max_worker_retries + 1 total attempts) and escalation limits.
