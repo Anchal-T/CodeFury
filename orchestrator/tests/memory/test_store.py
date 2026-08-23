@@ -163,3 +163,41 @@ def test_set_task_status_atomic_under_mixed_concurrency(store: StateStore) -> No
     assert final.status in {"pending", *statuses}, (
         "row must always reflect one coherent write, never an interleaved one"
     )
+
+
+def test_tasks_by_parent_returns_children_in_save_order(store: StateStore) -> None:
+    from pathlib import Path as _P  # noqa: F401 — keep imports local to this test
+
+    parent = Task(
+        id="epic-1", parent_id=None, level=3, goal="g", deliverable="d",
+        dependencies=[], status="review", assigned_to=None,
+    )
+    child_a = parent.model_copy(update={"id": "lead-a", "parent_id": "epic-1", "level": 2, "domain": "backend"})
+    child_b = parent.model_copy(update={"id": "lead-b", "parent_id": "epic-1", "level": 2, "domain": "infra"})
+    store.save_task(parent)
+    store.save_task(child_a)
+    store.save_task(child_b)
+
+    children = store.tasks_by_parent("epic-1")
+    assert [t.id for t in children] == ["lead-a", "lead-b"]
+    assert all(t.parent_id == "epic-1" for t in children)
+    assert store.tasks_by_parent("nobody") == []
+
+
+def test_tasks_by_status_filters_across_parents(store: StateStore) -> None:
+    lead_a = make_task("lead-a", status="pending_approval").model_copy(
+        update={"parent_id": "epic-1", "level": 2, "domain": "backend"}
+    )
+    lead_b = make_task("lead-b", status="pending").model_copy(
+        update={"parent_id": "epic-1", "level": 2, "domain": "infra"}
+    )
+    worker = make_task("w-1", status="pending")
+    store.save_task(lead_a)
+    store.save_task(lead_b)
+    store.save_task(worker)
+
+    approved = store.tasks_by_status("pending")
+    assert [t.id for t in approved] == ["lead-b", "w-1"]
+    waiting = store.tasks_by_status("pending_approval")
+    assert [t.id for t in waiting] == ["lead-a"]
+    assert store.tasks_by_status("done") == []
