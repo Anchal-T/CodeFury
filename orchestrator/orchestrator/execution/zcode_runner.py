@@ -53,11 +53,12 @@ class ZCodeRunner:
     def build_args(self, prompt: str) -> list[str]:
         """Insert the prompt into the command.
 
-        If the configured command contains a ``{prompt}`` placeholder it is
+        If any configured argument contains a ``{prompt}`` placeholder —
+        including inside larger tokens like ``--prompt={prompt}`` — it is
         substituted in place; otherwise the prompt is appended as the last
         argument.
         """
-        if PROMPT_PLACEHOLDER in self.command:
+        if any(PROMPT_PLACEHOLDER in arg for arg in self.command):
             return [arg.replace(PROMPT_PLACEHOLDER, prompt) for arg in self.command]
         return [*self.command, prompt]
 

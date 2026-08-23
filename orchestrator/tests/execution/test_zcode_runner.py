@@ -29,6 +29,23 @@ def test_prompt_placeholder_substituted_in_place(tmp_path: Path, python_bin: str
     assert result.stdout.strip() == "PRE hello-prompt"
 
 
+def test_prompt_placeholder_inside_larger_token_is_substituted(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """A placeholder embedded in a flag (e.g. --prompt={prompt}) must be
+    substituted in place — not silently appended as an extra argument."""
+    runner = ZCodeRunner(
+        command=[
+            python_bin,
+            "-c",
+            "import sys; print(sys.argv[1], len(sys.argv))",
+            "--prompt={prompt}",
+        ]
+    )
+    result = runner.run("hello-prompt", cwd=tmp_path)
+    assert result.stdout.strip() == "--prompt=hello-prompt 2"
+
+
 def test_nonzero_exit_is_not_ok(tmp_path: Path, python_bin: str) -> None:
     runner = ZCodeRunner(command=[python_bin, "-c", "raise SystemExit(3)"])
     result = runner.run("x", cwd=tmp_path)
