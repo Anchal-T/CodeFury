@@ -53,6 +53,19 @@ def test_nonzero_exit_is_not_ok(tmp_path: Path, python_bin: str) -> None:
     assert result.returncode == 3
 
 
+def test_non_utf8_output_is_decoded_with_replacement_not_crash(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """Child output must never crash the runner with UnicodeDecodeError,
+    whatever the host locale decodes it as."""
+    runner = ZCodeRunner(
+        command=[python_bin, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xff\\xfe')"]
+    )
+    result = runner.run("x", cwd=tmp_path)
+    assert result.ok
+    assert result.stdout.startswith("ok ")
+
+
 def test_timeout_kills_process_tree(tmp_path: Path, python_bin: str) -> None:
     # Parent spawns a child; both sleep far beyond the runner timeout. A
     # working tree-kill must reap both so communicate() can return.
