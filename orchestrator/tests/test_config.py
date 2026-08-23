@@ -48,10 +48,34 @@ def test_custom_yaml_sections(tmp_path: Path) -> None:
     assert config.paths.db == Path("./custom.db")
 
 
-def test_env_var_overrides_command(tmp_path: Path, monkeypatch) -> None:
+def test_env_var_overrides_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ZCODE_CMD", "python3 scripts/fake_worker.py")
     config = load_config(tmp_path / "missing.yaml")
     assert config.execution.zcode_command == ["python3", "scripts/fake_worker.py"]
+
+
+def test_env_var_overrides_command_keeps_quoted_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quoted arguments (spaces inside a single argv token) must survive —
+    plain str.split() would silently mangle them into wrong argv entries."""
+    monkeypatch.setenv("ZCODE_CMD", '"/usr/local/my agent/bin/zcode" --flag "slow tests"')
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.execution.zcode_command == [
+        "/usr/local/my agent/bin/zcode",
+        "--flag",
+        "slow tests",
+    ]
+
+
+def test_quoted_yaml_scalar_command_parsed_with_shlex(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        'execution:\n  zcode_command: \'run-agent --name "my agent"\'\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.zcode_command == ["run-agent", "--name", "my agent"]
 
 
 def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:

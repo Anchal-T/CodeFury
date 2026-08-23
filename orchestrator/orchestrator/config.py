@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,10 +62,16 @@ class Config:
 
 
 def _as_list(value: object) -> list[str] | None:
+    """Parse a command value into argv tokens.
+
+    Strings go through shlex so quoted arguments (spaces inside one token)
+    survive. Note: POSIX shlex treats backslashes as escapes — on Windows,
+    prefer yaml list-form for paths with backslashes.
+    """
     if value is None:
         return None
     if isinstance(value, str):
-        return value.split()
+        return shlex.split(value)
     return [str(item) for item in value]
 
 
@@ -148,5 +155,5 @@ def load_config(path: Path | None = None) -> Config:
         )
     env_cmd = os.environ.get("ZCODE_CMD")
     if env_cmd:
-        config.execution.zcode_command = env_cmd.split()
+        config.execution.zcode_command = shlex.split(env_cmd)
     return config
