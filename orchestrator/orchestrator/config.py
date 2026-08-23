@@ -47,6 +47,7 @@ class ConcurrencyConfig:
 class RetryConfig:
     max_worker_retries: int = 2
     max_manager_escalations: int = 1
+    max_reconcile_attempts: int = 1
 
 
 @dataclass
@@ -97,6 +98,9 @@ def load_config(path: Path | None = None) -> Config:
             max_manager_escalations=int(
                 retries_raw.get("max_manager_escalations", RetryConfig.max_manager_escalations)
             ),
+            max_reconcile_attempts=int(
+                retries_raw.get("max_reconcile_attempts", RetryConfig.max_reconcile_attempts)
+            ),
         ),
         raw=data,
     )
@@ -108,6 +112,11 @@ def load_config(path: Path | None = None) -> Config:
     if config.concurrency.max_managers < 1:
         raise ValueError(
             f"concurrency.max_managers must be >= 1, got {config.concurrency.max_managers}"
+        )
+    if config.retries.max_reconcile_attempts < 0:
+        raise ValueError(
+            "retries.max_reconcile_attempts must be >= 0, got "
+            f"{config.retries.max_reconcile_attempts}"
         )
     env_cmd = os.environ.get("ZCODE_CMD")
     if env_cmd:

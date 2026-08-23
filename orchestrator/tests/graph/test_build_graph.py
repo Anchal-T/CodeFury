@@ -105,6 +105,39 @@ def test_graph_merges_both_workers_end_to_end(
     assert store.get_task("m-1").status == "review"
 
 
+def test_graph_emits_manager_result_summary(
+    git_repo: Path, store: StateStore, python_bin: str
+) -> None:
+    """Phase 3 nesting contract: the manager graph reports one structured
+    result so a Domain Lead can attribute outcomes per manager."""
+    worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+    graph = build_graph(
+        store=store,
+        worktrees=worktrees,
+        runner=ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
+        decomposer=StaticDecomposer(["add module one"]),
+        retry_policy=RetryPolicy(max_worker_retries=2, max_manager_escalations=1),
+        test_command=[python_bin, "-c", "print('tests ok')"],
+        max_workers=2,
+    )
+    store.save_task(make_parent())
+
+    result = asyncio.run(
+        asyncio.wait_for(
+            graph.ainvoke({"manager_task": make_parent().model_dump()}), GRAPH_TIMEOUT_S
+        )
+    )
+
+    results = result["manager_results"]
+    assert len(results) == 1
+    entry = results[0]
+    assert entry["task_id"] == "m-1"
+    assert entry["final_status"] == "review"
+    assert len(entry["merged"]) == 1
+    assert entry["blockers"] == []
+    assert set(entry["attempts"].values()) == {1}
+
+
 def test_retry_cap_stops_runaway_loops(
     git_repo: Path, store: StateStore, python_bin: str
 ) -> None:

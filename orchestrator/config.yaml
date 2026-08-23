@@ -11,6 +11,7 @@ budgets:
 retries:
   max_worker_retries: 2
   max_manager_escalations: 1
+  max_reconcile_attempts: 1  # Domain Lead reconciliation dispatches per conflict
 
 execution:
   # Worker command is injectable: config here, or the ZCODE_CMD env var.

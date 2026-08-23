@@ -8,6 +8,10 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+#: Blocker-string convention marking a merge conflict; the Domain Lead keys
+#: reconciliation off this prefix (manager writes it, lead matches it).
+CONFLICT_BLOCKER_PREFIX = "merge conflict"
+
 
 class Task(BaseModel):
     id: str
@@ -18,6 +22,7 @@ class Task(BaseModel):
     dependencies: list[str] = []
     status: Literal["pending", "in_progress", "review", "done", "failed"]
     assigned_to: str | None = None
+    domain: str | None = None
 
 
 class Report(BaseModel):

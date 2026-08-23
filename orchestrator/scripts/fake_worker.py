@@ -8,7 +8,14 @@ Usage in the worker config (path relative to the worktree root, which is
 the repo root — the runner executes with cwd set to the worktree):
     ZCODE_CMD="python3 orchestrator/scripts/fake_worker.py" python -m orchestrator run --goal "..."
 
-Set FAKE_WORKER_FAIL=1 to simulate a failing worker (for retry-cap demos).
+Modes (environment variables):
+    FAKE_WORKER_FAIL=1              simulate a failing worker (retry demos)
+    FAKE_WORKER_TARGET=<relpath>    write that file instead of hash modules;
+                                    content embeds the prompt hash so two
+                                    workers on one file genuinely conflict
+    FAKE_WORKER_CONTENT=<text>      extra verbatim line appended to TARGET
+    FAKE_WORKER_ROLE=<name>         label written into the output (e.g.
+                                    "reconciler" for Domain Lead demos)
 """
 
 from __future__ import annotations
@@ -24,6 +31,30 @@ def main() -> int:
     if os.environ.get("FAKE_WORKER_FAIL") == "1":
         print("fake worker: simulated failure (FAKE_WORKER_FAIL=1)", file=sys.stderr)
         return 1
+
+    # Reconciliation dispatches are recognized from the orchestrator's
+    # '<task>-reconcile-<n>' id convention embedded in the prompt; an explicit
+    # FAKE_WORKER_ROLE overrides the detection.
+    role = os.environ.get("FAKE_WORKER_ROLE")
+    if not role:
+        role = "reconciler" if "-reconcile-" in prompt else "worker"
+    target = os.environ.get("FAKE_WORKER_TARGET")
+    if target:
+        digest = hashlib.sha1(prompt.encode()).hexdigest()[:8]
+        target_path = Path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            f"target: {target}",
+            f"written by: fake {role}",
+            f"prompt sha: {digest}",
+        ]
+        extra = os.environ.get("FAKE_WORKER_CONTENT")
+        if extra:
+            lines.append(extra)
+        target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"fake {role}: wrote {target}")
+        return 0
+
     # Each task writes its own module (named from the prompt hash) so that
     # parallel workers on different tasks never collide on merge.
     module = f"module_{hashlib.sha1(prompt.encode()).hexdigest()[:8]}"

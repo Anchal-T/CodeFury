@@ -33,8 +33,13 @@ def build_graph(
     test_command: list[str],
     max_workers: int = 3,
     tests_timeout: float = TEST_TIMEOUT_S,
+    worker_semaphore=None,
 ):
-    """Assemble and compile the Manager/Worker StateGraph with injected deps."""
+    """Assemble and compile the Manager/Worker StateGraph with injected deps.
+
+    ``worker_semaphore`` lets a caller share one concurrency cap across
+    graphs (the Domain Lead passes its own so the global worker budget holds).
+    """
     worker = make_worker_node(
         store=store,
         worktrees=worktrees,
@@ -42,7 +47,21 @@ def build_graph(
         test_command=test_command,
         max_workers=max_workers,
         tests_timeout=tests_timeout,
+        semaphore=worker_semaphore,
     )
+
+    def _result(
+        parent: Task, merged: list[str], blockers: list[str], attempts: dict
+    ) -> dict:
+        """One structured summary per finished manager — the Phase 3 nesting
+        contract a Domain Lead consumes to attribute outcomes per manager."""
+        return {
+            "task_id": parent.id,
+            "final_status": parent.status,
+            "merged": list(merged),
+            "blockers": list(blockers),
+            "attempts": dict(attempts),
+        }
 
     async def manager(state: OrchestratorState) -> dict:
         parent = Task.model_validate(state["manager_task"])
@@ -65,6 +84,7 @@ def build_graph(
                     "blockers": decision.blockers,
                     "merged": [],
                     "retrying": [],
+                    "manager_results": [_result(parent, [], decision.blockers, {})],
                 }
             for child in children:
                 store.save_task(child)
@@ -92,6 +112,9 @@ def build_graph(
                 repo_root=worktrees.repo_root, test_command=test_command,
             )
             update["final_status"] = parent.status
+            update["manager_results"] = [
+                _result(parent, decision.merged, decision.blockers, state.get("attempts", {}))
+            ]
         return update
 
     def dispatch(state: OrchestratorState):
