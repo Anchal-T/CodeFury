@@ -53,9 +53,6 @@ CREATE TABLE IF NOT EXISTS token_usage (
 );
 """
 
-_TABLES = ("tasks", "reports", "agents", "checkpoints", "token_usage")
-
-
 class StateStore:
     """Owns all SQLite persistence for the orchestrator."""
 
@@ -96,28 +93,43 @@ class StateStore:
 
     # -- tasks -------------------------------------------------------------
 
+    def _save_task_locked(self, task: Task) -> None:
+        """Persist one task row; caller must hold self._lock."""
+        self.connection().execute(
+            "INSERT OR REPLACE INTO tasks (id, parent_id, level, status, assigned_to, payload)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (task.id, task.parent_id, task.level, task.status, task.assigned_to, task.model_dump_json()),
+        )
+        self.connection().commit()
+
+    def _get_task_locked(self, task_id: str) -> Task | None:
+        """Load one task; caller must hold self._lock."""
+        row = self.connection().execute(
+            "SELECT payload FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return Task.model_validate_json(row["payload"]) if row else None
+
     def save_task(self, task: Task) -> None:
         with self._lock:
-            self.connection().execute(
-                "INSERT OR REPLACE INTO tasks (id, parent_id, level, status, assigned_to, payload)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (task.id, task.parent_id, task.level, task.status, task.assigned_to, task.model_dump_json()),
-            )
-            self.connection().commit()
+            self._save_task_locked(task)
 
     def get_task(self, task_id: str) -> Task | None:
         with self._lock:
-            row = self.connection().execute(
-                "SELECT payload FROM tasks WHERE id = ?", (task_id,)
-            ).fetchone()
-        return Task.model_validate_json(row["payload"]) if row else None
+            return self._get_task_locked(task_id)
 
     def set_task_status(self, task_id: str, status: str) -> None:
-        task = self.get_task(task_id)
-        if task is None:
-            raise KeyError(f"unknown task id: {task_id}")
-        task.status = status
-        self.save_task(task)
+        """Read-modify-write the status atomically.
+
+        The whole update shares ONE lock acquisition: splitting it across
+        get_task/save_task would let a concurrent whole-object save interleave
+        and silently drop this status change (last-writer-wins on the row).
+        """
+        with self._lock:
+            task = self._get_task_locked(task_id)
+            if task is None:
+                raise KeyError(f"unknown task id: {task_id}")
+            task.status = status
+            self._save_task_locked(task)
 
     # -- reports -----------------------------------------------------------
 

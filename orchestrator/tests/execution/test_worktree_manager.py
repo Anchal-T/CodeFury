@@ -1,5 +1,6 @@
 """Tests for orchestrator.execution.worktree_manager against a temp git repo."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,12 +22,10 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 @pytest.fixture()
-def git_repo(tmp_path: Path) -> Path:
+def git_repo(tmp_path: Path, git_init) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    _git(["init", "-b", "main"], cwd=root)
-    _git(["config", "user.email", "test@example.com"], cwd=root)
-    _git(["config", "user.name", "Test"], cwd=root)
+    git_init(root)
     (root / "README.md").write_text("init\n", encoding="utf-8")
     _git(["add", "-A"], cwd=root)
     _git(["commit", "-m", "init"], cwd=root)
@@ -73,6 +72,21 @@ def test_commit_and_diff_stat(manager: WorktreeManager) -> None:
     assert "feature.py" in stat
 
     assert manager.commit("w1", "nothing new") is False
+
+
+def test_diff_stat_covers_all_worker_commits(manager: WorktreeManager) -> None:
+    """diff_stat must summarize the worker branch vs its merge base — not
+    just the most recent commit."""
+    manager.create("w1b")
+    path = manager.worktree_path("w1b")
+    (path / "first.py").write_text("one\n", encoding="utf-8")
+    manager.commit("w1b", "first commit")
+    (path / "second.py").write_text("two\n", encoding="utf-8")
+    manager.commit("w1b", "second commit")
+
+    stat = manager.diff_stat("w1b")
+    assert "first.py" in stat, "earlier worker commits must not be omitted"
+    assert "second.py" in stat
 
 
 def test_merge_brings_changes_into_repo(manager: WorktreeManager, git_repo: Path) -> None:
@@ -135,9 +149,20 @@ def test_discard_removes_worktree_and_branch(manager: WorktreeManager, git_repo:
     assert "orchestrator/worker-w3" not in _git(["branch", "--list"], cwd=git_repo)
 
 
+def test_discard_tolerates_never_created_or_already_removed(
+    manager: WorktreeManager,
+) -> None:
+    """Teardown is best-effort: partial create() failures and double-discards
+    must not raise or leak the branch."""
+    manager.discard("ghost")          # never created
+    manager.create("w3b")
+    manager.discard("w3b")
+    manager.discard("w3b")            # already removed
+
+
 def test_cleanup_prunes_stale_worktrees(manager: WorktreeManager, git_repo: Path) -> None:
     path = manager.create("w4")
-    subprocess.run(["rm", "-rf", str(path)], check=True)
+    shutil.rmtree(path)  # stdlib: portable (rm -rf is Unix-only)
     manager.cleanup()
     assert "worker_w4" not in _git(["worktree", "list"], cwd=git_repo)
 
@@ -146,5 +171,8 @@ def test_find_repo_root(git_repo: Path) -> None:
     nested = git_repo / "a" / "b"
     nested.mkdir(parents=True)
     assert find_repo_root(nested) == git_repo.resolve()
+    outside = (nested.parents[1] / ".." / "..").resolve()
+    if any((candidate / ".git").exists() for candidate in (outside, *outside.parents)):
+        pytest.skip("temporary directory is nested inside another git repository")
     with pytest.raises(RuntimeError):
-        find_repo_root(nested.parents[1] / ".." / "..")
+        find_repo_root(outside)

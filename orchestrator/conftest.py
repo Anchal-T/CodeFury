@@ -44,3 +44,27 @@ def python_bin() -> str:
         if proc.stdout.strip() == marker:
             return candidate
     pytest.fail("no usable python interpreter found for subprocess tests")
+
+
+@pytest.fixture()
+def git_init():
+    """Return a portable repo initializer.
+
+    Uses plain ``git init`` + ``symbolic-ref`` instead of ``init -b`` so it
+    works on Git < 2.28; also sets a deterministic commit identity.
+    """
+
+    def _init(root: Path) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        for args in (
+            ["git", "init"],
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            ["git", "config", "user.email", "test@example.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            proc = subprocess.run(
+                args, cwd=str(root), capture_output=True, text=True, shell=False
+            )
+            assert proc.returncode == 0, proc.stderr
+
+    return _init

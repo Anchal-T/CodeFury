@@ -6,7 +6,7 @@ token cost predictable as the agent tree grows.
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 #: Blocker-string convention marking a merge conflict; the Domain Lead keys
 #: reconciliation off this prefix (manager writes it, lead matches it).
@@ -19,7 +19,7 @@ class Task(BaseModel):
     level: Literal[0, 1, 2, 3]
     goal: str
     deliverable: str
-    dependencies: list[str] = []
+    dependencies: list[str] = Field(default_factory=list)
     status: Literal["pending", "in_progress", "review", "done", "failed"]
     assigned_to: str | None = None
     domain: str | None = None
@@ -32,4 +32,4 @@ class Report(BaseModel):
     diff_ref: str | None = None
     tests_passed: bool
     tokens_used: int
-    blockers: list[str] = []
+    blockers: list[str] = Field(default_factory=list)

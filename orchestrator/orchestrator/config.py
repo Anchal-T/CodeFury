@@ -1,17 +1,23 @@
 """Typed loading of config.yaml (plan §8) with cross-platform defaults.
 
 The worker command is injectable three ways, lowest priority first:
-config.yaml ``execution.zcode_command`` < ``ZCODE_CMD`` environment variable.
+built-in ``DEFAULT_ZCODE_COMMAND`` < config.yaml ``execution.zcode_command``
+< the ``ZCODE_CMD`` environment variable.
 """
 
 from __future__ import annotations
 
+import logging
+import math
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ZCODE_COMMAND = ["zcode"]
 # The running interpreter is the only spawnable python guaranteed to exist on
@@ -60,23 +66,62 @@ class Config:
 
 
 def _as_list(value: object) -> list[str] | None:
+    """Parse a command value into argv tokens.
+
+    Strings go through shlex so quoted arguments (spaces inside one token)
+    survive. Note: POSIX shlex treats backslashes as escapes — on Windows,
+    prefer yaml list-form for paths with backslashes.
+    """
     if value is None:
         return None
     if isinstance(value, str):
-        return value.split()
+        return shlex.split(value)
     return [str(item) for item in value]
+
+
+def _positive_float(section: dict, key: str, default: float) -> float:
+    """Coerce a config value to a positive finite float, naming the key."""
+    raw = section.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"execution.{key} must be a number, got {raw!r}") from err
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"execution.{key} must be a positive finite number, got {raw!r}"
+        )
+    return value
 
 
 def load_config(path: Path | None = None) -> Config:
     """Load config.yaml; missing file or sections fall back to defaults."""
     data: dict = {}
-    if path is not None and path.is_file():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if path is not None:
+        if path.is_file():
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if loaded is not None and not isinstance(loaded, dict):
+                raise ValueError(
+                    f"{path}: top-level config must be a mapping, got {type(loaded).__name__}"
+                )
+            data = loaded or {}
+        elif path.exists():
+            # Exists but is unusable (a directory, permissions...) — a likely
+            # operator mistake; the intentional missing-file fallback stays
+            # silent, this one must not be.
+            logger.warning("config %s is not a readable file; using defaults", path)
 
-    paths_raw = data.get("paths") or {}
-    exec_raw = data.get("execution") or {}
-    conc_raw = data.get("concurrency") or {}
-    retries_raw = data.get("retries") or {}
+    def _section(name: str) -> dict:
+        raw = data.get(name)
+        if raw is not None and not isinstance(raw, dict):
+            raise ValueError(
+                f"{path}: config section '{name}' must be a mapping, got {type(raw).__name__}"
+            )
+        return raw or {}
+
+    paths_raw = _section("paths")
+    exec_raw = _section("execution")
+    conc_raw = _section("concurrency")
+    retries_raw = _section("retries")
 
     config = Config(
         paths=PathsConfig(
@@ -87,7 +132,7 @@ def load_config(path: Path | None = None) -> Config:
         execution=ExecutionConfig(
             zcode_command=_as_list(exec_raw.get("zcode_command")) or list(DEFAULT_ZCODE_COMMAND),
             test_command=_as_list(exec_raw.get("test_command")) or list(DEFAULT_TEST_COMMAND),
-            worker_timeout_s=float(exec_raw.get("worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S)),
+            worker_timeout_s=_positive_float(exec_raw, "worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S),
         ),
         concurrency=ConcurrencyConfig(
             max_workers=int(conc_raw.get("max_workers", ConcurrencyConfig.max_workers)),
@@ -120,5 +165,5 @@ def load_config(path: Path | None = None) -> Config:
         )
     env_cmd = os.environ.get("ZCODE_CMD")
     if env_cmd:
-        config.execution.zcode_command = env_cmd.split()
+        config.execution.zcode_command = shlex.split(env_cmd)
     return config

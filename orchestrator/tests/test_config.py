@@ -1,6 +1,5 @@
 """Tests for orchestrator.config."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -16,13 +15,33 @@ def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ZCODE_CMD", raising=False)
 
 
-def test_loads_real_repo_config() -> None:
-    config = load_config(REPO_CONFIG)
-    assert config.execution.zcode_command == ["zcode"]
-    assert config.execution.test_command == [sys.executable, "-m", "pytest", "-q"]
-    assert config.execution.worker_timeout_s == 1800
-    assert config.paths.db == Path("./data/orchestrator.db")
-    assert config.paths.workspaces == Path("./workspaces")
+def test_committed_config_parses() -> None:
+    """Smoke-check only: the committed config.yaml is a tuned deployment
+    artifact — its operational values must not be pinned here."""
+    assert load_config(REPO_CONFIG).raw
+
+
+def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
+    """Loader behavior verified against a dedicated fixture, decoupled from
+    the repo's tunable config.yaml."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "execution:\n"
+        "  zcode_command: [/usr/bin/python3, agent.py]\n"
+        "  worker_timeout_s: 60\n"
+        "paths:\n"
+        "  db: ./custom.db\n"
+        "  workspaces: ./ws\n"
+        "retries:\n"
+        "  max_worker_retries: 1\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.zcode_command == ["/usr/bin/python3", "agent.py"]
+    assert config.execution.worker_timeout_s == 60.0
+    assert config.paths.db == Path("./custom.db")
+    assert config.paths.workspaces == Path("./ws")
+    assert config.retries.max_worker_retries == 1
 
 
 def test_missing_file_falls_back_to_defaults() -> None:
@@ -48,17 +67,61 @@ def test_custom_yaml_sections(tmp_path: Path) -> None:
     assert config.paths.db == Path("./custom.db")
 
 
-def test_env_var_overrides_command(tmp_path: Path, monkeypatch) -> None:
+def test_env_var_overrides_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ZCODE_CMD", "python3 scripts/fake_worker.py")
     config = load_config(tmp_path / "missing.yaml")
     assert config.execution.zcode_command == ["python3", "scripts/fake_worker.py"]
 
 
+def test_env_var_overrides_command_keeps_quoted_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quoted arguments (spaces inside a single argv token) must survive —
+    plain str.split() would silently mangle them into wrong argv entries."""
+    monkeypatch.setenv("ZCODE_CMD", '"/usr/local/my agent/bin/zcode" --flag "slow tests"')
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.execution.zcode_command == [
+        "/usr/local/my agent/bin/zcode",
+        "--flag",
+        "slow tests",
+    ]
+
+
+def test_quoted_yaml_scalar_command_parsed_with_shlex(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        'execution:\n  zcode_command: \'run-agent --name "my agent"\'\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.zcode_command == ["run-agent", "--name", "my agent"]
+
+
+def test_existing_but_unusable_config_path_warns(tmp_path: Path, caplog) -> None:
+    """A directory (or unreadable file) at an explicit path is a likely
+    operator mistake — surface a warning instead of silently defaulting."""
+    import logging
+
+    directory = tmp_path / "config.yaml"
+    directory.mkdir()
+    with caplog.at_level(logging.WARNING, logger="orchestrator.config"):
+        config = load_config(directory)
+    assert config.execution.zcode_command  # defaults still apply
+    assert any("not a readable file" in record.message for record in caplog.records)
+
+
+def test_missing_config_path_stays_silent(tmp_path: Path, caplog) -> None:
+    """Missing-file fallback is intentional (fresh checkouts); no warning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="orchestrator.config"):
+        load_config(tmp_path / "does-not-exist.yaml")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
 def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:
     """max_workers: 0 would deadlock every dispatch (Semaphore(0) is never
     acquirable) — invalid configuration must fail fast at load time."""
-    import pytest
-
     config_file = tmp_path / "config.yaml"
     config_file.write_text("concurrency:\n  max_workers: 0\n", encoding="utf-8")
     with pytest.raises(ValueError):
@@ -81,4 +144,37 @@ def test_negative_reconcile_attempts_rejected(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("retries:\n  max_reconcile_attempts: -1\n", encoding="utf-8")
     with pytest.raises(ValueError):
+        load_config(config_file)
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", ".nan", ".inf"])
+def test_non_positive_worker_timeout_rejected(tmp_path: Path, bad: str) -> None:
+    """A non-positive timeout would make every worker time out immediately —
+    reject it at load time with the offending key named."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"execution:\n  worker_timeout_s: {bad}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="worker_timeout_s"):
+        load_config(config_file)
+
+
+def test_valid_worker_timeout_accepted(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("execution:\n  worker_timeout_s: 90\n", encoding="utf-8")
+    assert load_config(config_file).execution.worker_timeout_s == 90.0
+
+
+def test_non_mapping_top_level_rejected(tmp_path: Path) -> None:
+    """A scalar/list yaml root must fail with an actionable message, not an
+    AttributeError from deep inside the loader."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("- item\n- another\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="mapping"):
+        load_config(config_file)
+
+
+@pytest.mark.parametrize("section", ["paths", "execution", "concurrency", "retries"])
+def test_non_mapping_section_rejected(tmp_path: Path, section: str) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"{section}: just-a-string\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=section):
         load_config(config_file)

@@ -53,11 +53,12 @@ class ZCodeRunner:
     def build_args(self, prompt: str) -> list[str]:
         """Insert the prompt into the command.
 
-        If the configured command contains a ``{prompt}`` placeholder it is
+        If any configured argument contains a ``{prompt}`` placeholder —
+        including inside larger tokens like ``--prompt={prompt}`` — it is
         substituted in place; otherwise the prompt is appended as the last
         argument.
         """
-        if PROMPT_PLACEHOLDER in self.command:
+        if any(PROMPT_PLACEHOLDER in arg for arg in self.command):
             return [arg.replace(PROMPT_PLACEHOLDER, prompt) for arg in self.command]
         return [*self.command, prompt]
 
@@ -72,6 +73,8 @@ class ZCodeRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=self.env,
         )
         timed_out = False
@@ -80,7 +83,12 @@ class ZCodeRunner:
         except subprocess.TimeoutExpired:
             timed_out = True
             self.kill_tree(proc.pid)
-            stdout, stderr = proc.communicate()
+            try:
+                stdout, stderr = proc.communicate(timeout=TREE_KILL_GRACE_S)
+            except subprocess.TimeoutExpired:
+                # Uninterruptible survivor: last-resort kill, then reap.
+                proc.kill()
+                stdout, stderr = proc.communicate()
         return RunnerResult(
             returncode=proc.returncode,
             stdout=stdout or "",
@@ -90,15 +98,39 @@ class ZCodeRunner:
         )
 
     def kill_tree(self, pid: int) -> None:
-        """Terminate a process and all its children, then kill survivors."""
+        """Terminate a process and all its descendants, then kill survivors.
+
+        The root is terminated first, then descendants are re-swept until no
+        new pids appear so grandchildren spawned mid-teardown cannot escape.
+        psutil.AccessDenied (protected/elevated processes) is swallowed — the
+        caller's bounded communicate() is the final backstop.
+        """
+        killed: set[int] = {pid}
         try:
             root = psutil.Process(pid)
+            root.terminate()
         except psutil.NoSuchProcess:
             return
-        targets = [root, *root.children(recursive=True)]
-        for target in targets:
+        while True:
             try:
-                target.terminate()
+                current = [root, *root.children(recursive=True)]
+            except psutil.NoSuchProcess:
+                break
+            fresh = [proc for proc in current if proc.pid not in killed]
+            if not fresh:
+                break
+            for target in fresh:
+                killed.add(target.pid)
+                try:
+                    target.terminate()
+                except psutil.NoSuchProcess:
+                    pass
+                except psutil.AccessDenied:
+                    pass
+        targets = []
+        for proc_id in killed:
+            try:
+                targets.append(psutil.Process(proc_id))
             except psutil.NoSuchProcess:
                 pass
         _gone, alive = psutil.wait_procs(targets, timeout=TREE_KILL_GRACE_S)
@@ -106,4 +138,6 @@ class ZCodeRunner:
             try:
                 survivor.kill()
             except psutil.NoSuchProcess:
+                pass
+            except psutil.AccessDenied:
                 pass
