@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator.contracts import Report, Task
-from orchestrator.execution.worktree_manager import WorktreeManager
+from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
+from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.worker import run_tests
 from orchestrator.memory.store import StateStore
@@ -52,9 +52,12 @@ def review_reports(
         if report.tests_passed and not report.blockers:
             try:
                 worktrees.merge(task.id)
-            except RuntimeError as exc:
+            except MergeConflictError as exc:
                 decision.failed.append(task.id)
-                decision.blockers.append(f"merge conflict for {task.id}: {exc}")
+                files = ", ".join(exc.conflicted_files) or "unknown files"
+                decision.blockers.append(
+                    f"{CONFLICT_BLOCKER_PREFIX} for {task.id}: files: {files}"
+                )
                 store.set_task_status(task.id, "failed")
                 continue
             decision.merged.append(task.id)

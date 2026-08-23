@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX
 from orchestrator.execution.worktree_manager import (
+    MergeConflictError,
     WorktreeManager,
     find_repo_root,
     sanitize_worker_id,
@@ -104,6 +106,26 @@ def test_failed_merge_aborts_and_leaves_repo_clean(manager: WorktreeManager, git
     manager.commit("w7", "later change")
     manager.merge("w7")
     assert (git_repo / "later.txt").read_text(encoding="utf-8") == "later\n"
+
+
+def test_merge_conflict_raises_typed_error_naming_files(
+    manager: WorktreeManager, git_repo: Path
+) -> None:
+    """The Domain Lead needs the conflicted paths to write the reconciler goal."""
+    manager.create("w8")
+    (manager.worktree_path("w8") / "conflict.txt").write_text("worker version\n", encoding="utf-8")
+    manager.commit("w8", "worker change")
+    (git_repo / "conflict.txt").write_text("base version\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=git_repo)
+    _git(["commit", "-m", "base change"], cwd=git_repo)
+
+    with pytest.raises(MergeConflictError) as excinfo:
+        manager.merge("w8")
+    assert excinfo.value.conflicted_files == ["conflict.txt"]
+
+
+def test_conflict_blocker_prefix_is_shared_convention() -> None:
+    assert CONFLICT_BLOCKER_PREFIX == "merge conflict"
 
 
 def test_discard_removes_worktree_and_branch(manager: WorktreeManager, git_repo: Path) -> None:

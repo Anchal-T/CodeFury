@@ -8,6 +8,7 @@ subprocess invocations with shell=False so this works on Linux and Windows.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,29 @@ from pathlib import Path
 _BRANCH_PREFIX = "orchestrator/worker-"
 # Characters that are invalid in Windows paths or problematic in branch names.
 _INVALID_CHARS = '<>:"\\|?*'
+# git stderr lines like: CONFLICT (content): Merge conflict in src/app.py
+_CONFLICT_LINE_RE = re.compile(r"^CONFLICT \([^)]+\): (.+)$")
+
+
+class MergeConflictError(RuntimeError):
+    """A merge hit conflicts; carries the conflicted file paths for the Lead."""
+
+    def __init__(self, message: str, conflicted_files: list[str]) -> None:
+        super().__init__(message)
+        self.conflicted_files = conflicted_files
+
+
+def parse_conflicted_files(stderr: str) -> list[str]:
+    """Extract conflicted paths from git merge stderr (deduplicated, sorted)."""
+    files: set[str] = set()
+    for line in stderr.splitlines():
+        match = _CONFLICT_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        detail = match.group(1)
+        _, sep, path = detail.rpartition(" in ")
+        files.add(path if sep else detail)
+    return sorted(files)
 
 
 def sanitize_worker_id(worker_id: str) -> str:
@@ -104,8 +128,9 @@ class WorktreeManager:
     def merge(self, worker_id: str) -> None:
         """Merge the worker's branch into the current branch of repo_root with --no-ff.
 
-        On failure (e.g. a conflict) the merge is aborted so the repo is left
-        clean for the next worker's merge.
+        On failure the merge is aborted so the repo is left clean for the
+        next worker's merge; conflicts raise MergeConflictError naming the
+        conflicted files (the Domain Lead puts them in the reconciler goal).
         """
         proc = self._git(
             ["merge", "--no-ff", self.branch_name(worker_id), "-m", f"merge(worker): {worker_id}"],
@@ -113,7 +138,15 @@ class WorktreeManager:
         )
         if proc.returncode != 0:
             self._git(["merge", "--abort"], cwd=self.repo_root)
-            raise RuntimeError(f"git merge failed ({proc.returncode}): {proc.stderr.strip()}")
+            # git writes CONFLICT lines to stdout, fatal errors to stderr.
+            output = f"{proc.stdout}\n{proc.stderr}"
+            files = parse_conflicted_files(output)
+            detail = output.strip()
+            if files:
+                raise MergeConflictError(
+                    f"git merge failed ({proc.returncode}): {detail}", files
+                )
+            raise RuntimeError(f"git merge failed ({proc.returncode}): {detail}")
 
     def discard(self, worker_id: str) -> None:
         """Drop the worker's worktree and branch."""
