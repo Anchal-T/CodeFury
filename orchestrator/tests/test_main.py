@@ -158,6 +158,9 @@ def test_start_rejects_duplicate_epic_task_id(
     second = runner.invoke(cli, args)
     assert second.exit_code != 0
     assert "epic-dup" in second.output
+    assert "WARNING" in second.output, "the rejection must carry an explicit user warning"
+    assert "2 child lead(s)" in second.output, "warning states what is at stake"
+    assert "orchestrator start" in second.output, "warning tells the user how to proceed"
 
     with StateStore(root / "data" / "db.sqlite") as store:
         assert len(store.tasks_by_parent("epic-dup")) == 2, "no stale children appended"

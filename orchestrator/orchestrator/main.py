@@ -344,11 +344,21 @@ def _start_plan_mode(
     )
     with StateStore(base / config.paths.db) as store:
         store.init_schema()
-        if task_id is not None and store.get_task(task_id) is not None:
-            raise click.ClickException(
-                f"task id already exists: {task_id} — refusing to overwrite the epic "
-                "while its existing children stay keyed to it"
+        existing = store.get_task(task_id) if task_id is not None else None
+        if existing is not None:
+            children = store.tasks_by_parent(task_id)
+            click.echo(
+                f"WARNING: epic task id '{task_id}' already exists "
+                f"(status={existing.status}, {len(children)} child lead(s)) — re-planning "
+                "would overwrite the epic and mix old and new leads under one parent.",
+                err=True,
             )
+            click.echo(
+                "Hint: pass a different --task-id, omit it to generate one, or resume the "
+                "existing epic with `orchestrator start`.",
+                err=True,
+            )
+            raise click.ClickException(f"task id already exists: {task_id}")
         leads = plan_epic(epic=epic, decomposer=StaticEpicDecomposer(pairs), store=store)
     if not leads:
         raise SystemExit(1)
