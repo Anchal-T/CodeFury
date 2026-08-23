@@ -37,7 +37,9 @@ class RetryPolicy:
         A task gets at most max_worker_retries + 1 attempts in total: the
         initial try plus max_worker_retries re-attempts.
         """
+        del task_id  # cap is global today; id kept for future per-task policies
         return 1 <= attempt <= self.max_worker_retries
 
     def can_escalate(self, manager_id: str, escalations: int) -> bool:
+        del manager_id  # cap is global today; id kept for future per-lead policies
         return escalations < self.max_manager_escalations
