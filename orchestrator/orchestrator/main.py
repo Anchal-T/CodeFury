@@ -215,9 +215,29 @@ def lead(
 
 
 @cli.command()
-def start() -> None:
-    """Start the orchestrator and begin processing the current epic."""
-    raise NotImplementedError("Phase 4")
+@click.option("--epic", "epic_goal", default=None, help="Plan a new epic (requires --domain-goal pairs).")
+@click.option(
+    "--domain-goal",
+    "domain_goals",
+    multiple=True,
+    help="One 'goal:domain' pair per planned lead task, e.g. 'ship auth api:backend'.",
+)
+@click.option("--task-id", default=None, help="Stable epic task id (default: generated).")
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def start(
+    epic_goal: str | None,
+    domain_goals: tuple[str, ...],
+    task_id: str | None,
+    config_path: Path,
+) -> None:
+    """Plan an epic for approval, or resume the current epic's approved leads (Phase 4)."""
+    raise NotImplementedError("Phase 4 wiring")
 
 
 @cli.command()
@@ -228,9 +248,28 @@ def status() -> None:
 
 @cli.command()
 @click.argument("task_id")
-def approve(task_id: str) -> None:
-    """Approve a task at a human approval checkpoint."""
-    raise NotImplementedError("Phase 4")
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def approve(task_id: str, config_path: Path) -> None:
+    """Approve a pending_approval task at the human checkpoint."""
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    with StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        task = store.get_task(task_id)
+        if task is None:
+            raise click.ClickException(f"unknown task id: {task_id}")
+        if task.status != "pending_approval":
+            raise click.ClickException(
+                f"task {task_id} is '{task.status}', not awaiting approval"
+            )
+        store.set_task_status(task_id, "pending")
+    click.echo(f"[approve] {task_id} ('{task.goal}') approved → pending")
 
 
 @cli.command()

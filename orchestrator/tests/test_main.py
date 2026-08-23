@@ -1,4 +1,4 @@
-"""Tests for the manage CLI command (Phase 2 graph driver)."""
+"""Tests for the manage/lead/start/approve CLI commands."""
 
 import subprocess
 from pathlib import Path
@@ -7,7 +7,11 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from orchestrator.contracts import Task
+from orchestrator.graph.architect import plan_epic
+from orchestrator.graph.decompose import StaticEpicDecomposer
 from orchestrator.main import cli
+from orchestrator.memory.store import StateStore
 
 FAKE_WORKER = Path(__file__).resolve().parents[1] / "scripts" / "fake_worker.py"
 
@@ -22,6 +26,66 @@ def _init_repo(root: Path, git_init) -> None:
     (root / "README.md").write_text("init\n", encoding="utf-8")
     _git(["add", "-A"], cwd=root)
     _git(["commit", "-m", "init"], cwd=root)
+
+
+def _write_config(root: Path, python_bin: str) -> None:
+    config = {
+        "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
+        "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces", "domains": "./domains"},
+        "retries": {"max_worker_retries": 1, "max_reconcile_attempts": 1},
+    }
+    (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+
+def _plan_epic_in_db(root: Path, epic_id: str = "epic-t") -> list[Task]:
+    """Plan a two-domain epic directly into the CLI's database."""
+    epic = Task(
+        id=epic_id, parent_id=None, level=3, goal="g", deliverable="d",
+        dependencies=[], status="pending", assigned_to=None,
+    )
+    with StateStore(root / "data" / "db.sqlite") as store:
+        store.init_schema()
+        return plan_epic(
+            epic=epic,
+            decomposer=StaticEpicDecomposer([("goal b", "backend"), ("goal i", "infra")]),
+            store=store,
+        )
+
+
+def test_approve_flips_pending_approval_to_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    leads = _plan_epic_in_db(root)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["approve", leads[0].id], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert leads[0].id in result.output
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert store.get_task(leads[0].id).status == "pending"
+        assert store.get_task(leads[1].id).status == "pending_approval"
+
+
+def test_approve_rejects_tasks_not_awaiting_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    leads = _plan_epic_in_db(root)
+    with StateStore(root / "data" / "db.sqlite") as store:
+        store.set_task_status(leads[0].id, "pending")
+    monkeypatch.chdir(root)
+
+    already_approved = CliRunner().invoke(cli, ["approve", leads[0].id])
+    unknown = CliRunner().invoke(cli, ["approve", "no-such-task"])
+
+    assert already_approved.exit_code != 0
+    assert unknown.exit_code != 0
 
 
 def test_manage_command_runs_graph_end_to_end(
