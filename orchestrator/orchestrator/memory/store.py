@@ -131,6 +131,22 @@ class StateStore:
             task.status = status
             self._save_task_locked(task)
 
+    def tasks_by_parent(self, parent_id: str) -> list[Task]:
+        """Children of a task, in insertion order (rowid)."""
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT payload FROM tasks WHERE parent_id = ? ORDER BY rowid", (parent_id,)
+            ).fetchall()
+        return [Task.model_validate_json(row["payload"]) for row in rows]
+
+    def tasks_by_status(self, status: str) -> list[Task]:
+        """All tasks with the given status, in insertion order (rowid)."""
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT payload FROM tasks WHERE status = ? ORDER BY rowid", (status,)
+            ).fetchall()
+        return [Task.model_validate_json(row["payload"]) for row in rows]
+
     # -- reports -----------------------------------------------------------
 
     def save_report(self, report: Report) -> None:

@@ -20,7 +20,7 @@ class Task(BaseModel):
     goal: str
     deliverable: str
     dependencies: list[str] = Field(default_factory=list)
-    status: Literal["pending", "in_progress", "review", "done", "failed"]
+    status: Literal["pending", "pending_approval", "in_progress", "review", "done", "failed"]
     assigned_to: str | None = None
     domain: str | None = None
 

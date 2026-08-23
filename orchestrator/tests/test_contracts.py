@@ -40,3 +40,22 @@ def test_report_blockers_default_is_instance_isolated() -> None:
 
 def test_conflict_blocker_prefix_is_shared_convention() -> None:
     assert isinstance(CONFLICT_BLOCKER_PREFIX, str) and CONFLICT_BLOCKER_PREFIX
+
+
+def test_task_supports_pending_approval_status() -> None:
+    """The Architect's approval gate (plan §9 Phase 4): planned domain tasks
+    wait in pending_approval until a human flips them via the CLI."""
+    task = Task(
+        id="t-1", parent_id=None, level=2, goal="g", deliverable="d",
+        status="pending_approval",
+    )
+    assert task.status == "pending_approval"
+    assert Task.model_validate_json(task.model_dump_json()).status == "pending_approval"
+
+
+def test_task_rejects_unknown_status() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Task(id="t-1", parent_id=None, level=2, goal="g", deliverable="d", status="nonsense")
