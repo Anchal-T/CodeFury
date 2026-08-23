@@ -6,6 +6,7 @@ config.yaml ``execution.zcode_command`` < ``ZCODE_CMD`` environment variable.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -67,6 +68,20 @@ def _as_list(value: object) -> list[str] | None:
     return [str(item) for item in value]
 
 
+def _positive_float(section: dict, key: str, default: float) -> float:
+    """Coerce a config value to a positive finite float, naming the key."""
+    raw = section.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"execution.{key} must be a number, got {raw!r}") from err
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"execution.{key} must be a positive finite number, got {raw!r}"
+        )
+    return value
+
+
 def load_config(path: Path | None = None) -> Config:
     """Load config.yaml; missing file or sections fall back to defaults."""
     data: dict = {}
@@ -87,7 +102,7 @@ def load_config(path: Path | None = None) -> Config:
         execution=ExecutionConfig(
             zcode_command=_as_list(exec_raw.get("zcode_command")) or list(DEFAULT_ZCODE_COMMAND),
             test_command=_as_list(exec_raw.get("test_command")) or list(DEFAULT_TEST_COMMAND),
-            worker_timeout_s=float(exec_raw.get("worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S)),
+            worker_timeout_s=_positive_float(exec_raw, "worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S),
         ),
         concurrency=ConcurrencyConfig(
             max_workers=int(conc_raw.get("max_workers", ConcurrencyConfig.max_workers)),

@@ -82,3 +82,19 @@ def test_negative_reconcile_attempts_rejected(tmp_path: Path) -> None:
     config_file.write_text("retries:\n  max_reconcile_attempts: -1\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(config_file)
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", ".nan", ".inf"])
+def test_non_positive_worker_timeout_rejected(tmp_path: Path, bad: str) -> None:
+    """A non-positive timeout would make every worker time out immediately —
+    reject it at load time with the offending key named."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"execution:\n  worker_timeout_s: {bad}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="worker_timeout_s"):
+        load_config(config_file)
+
+
+def test_valid_worker_timeout_accepted(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("execution:\n  worker_timeout_s: 90\n", encoding="utf-8")
+    assert load_config(config_file).execution.worker_timeout_s == 90.0
