@@ -1,11 +1,13 @@
 """Typed loading of config.yaml (plan §8) with cross-platform defaults.
 
 The worker command is injectable three ways, lowest priority first:
-config.yaml ``execution.zcode_command`` < ``ZCODE_CMD`` environment variable.
+built-in ``DEFAULT_ZCODE_COMMAND`` < config.yaml ``execution.zcode_command``
+< the ``ZCODE_CMD`` environment variable.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import shlex
@@ -14,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ZCODE_COMMAND = ["zcode"]
 # The running interpreter is the only spawnable python guaranteed to exist on
@@ -92,13 +96,19 @@ def _positive_float(section: dict, key: str, default: float) -> float:
 def load_config(path: Path | None = None) -> Config:
     """Load config.yaml; missing file or sections fall back to defaults."""
     data: dict = {}
-    if path is not None and path.is_file():
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if loaded is not None and not isinstance(loaded, dict):
-            raise ValueError(
-                f"{path}: top-level config must be a mapping, got {type(loaded).__name__}"
-            )
-        data = loaded or {}
+    if path is not None:
+        if path.is_file():
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if loaded is not None and not isinstance(loaded, dict):
+                raise ValueError(
+                    f"{path}: top-level config must be a mapping, got {type(loaded).__name__}"
+                )
+            data = loaded or {}
+        elif path.exists():
+            # Exists but is unusable (a directory, permissions...) — a likely
+            # operator mistake; the intentional missing-file fallback stays
+            # silent, this one must not be.
+            logger.warning("config %s is not a readable file; using defaults", path)
 
     def _section(name: str) -> dict:
         raw = data.get(name)

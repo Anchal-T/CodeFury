@@ -78,6 +78,28 @@ def test_quoted_yaml_scalar_command_parsed_with_shlex(tmp_path: Path) -> None:
     assert config.execution.zcode_command == ["run-agent", "--name", "my agent"]
 
 
+def test_existing_but_unusable_config_path_warns(tmp_path: Path, caplog) -> None:
+    """A directory (or unreadable file) at an explicit path is a likely
+    operator mistake — surface a warning instead of silently defaulting."""
+    import logging
+
+    directory = tmp_path / "config.yaml"
+    directory.mkdir()
+    with caplog.at_level(logging.WARNING, logger="orchestrator.config"):
+        config = load_config(directory)
+    assert config.execution.zcode_command  # defaults still apply
+    assert any("not a readable file" in record.message for record in caplog.records)
+
+
+def test_missing_config_path_stays_silent(tmp_path: Path, caplog) -> None:
+    """Missing-file fallback is intentional (fresh checkouts); no warning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="orchestrator.config"):
+        load_config(tmp_path / "does-not-exist.yaml")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
 def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:
     """max_workers: 0 would deadlock every dispatch (Semaphore(0) is never
     acquirable) — invalid configuration must fail fast at load time."""
