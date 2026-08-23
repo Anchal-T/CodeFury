@@ -88,6 +88,124 @@ def test_approve_rejects_tasks_not_awaiting_approval(
     assert unknown.exit_code != 0
 
 
+def test_start_epic_plans_and_awaits_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    """Plan mode: creates the epic + pending_approval leads, runs NOTHING."""
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "start", "--epic", "ship the platform",
+            "--domain-goal", "ship auth api:backend",
+            "--domain-goal", "wire pipeline:infra",
+            "--task-id", "epic-42",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "epic-42" in result.output
+    assert result.output.count("pending_approval") >= 2
+    assert not list(root.glob("module_*.py")), "nothing may run before approval"
+    workspaces = root / "workspaces"
+    assert not workspaces.exists() or not any(workspaces.iterdir())
+
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert store.get_task("epic-42").status == "review"
+        leads = store.tasks_by_parent("epic-42")
+        assert [lead.domain for lead in leads] == ["backend", "infra"]
+        assert all(lead.status == "pending_approval" for lead in leads)
+
+
+def test_start_requires_domain_goals_with_epic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["start", "--epic", "goalless epic"])
+
+    assert result.exit_code != 0
+    bad = CliRunner().invoke(cli, ["start", "--epic", "g", "--domain-goal", "no-colon"])
+    assert bad.exit_code != 0
+
+
+def test_start_resume_runs_only_approved_leads_and_finishes_epic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    """The full Phase 4 story: plan → approve one → partial run → approve the
+    rest → resume → epic done with PROJECT_STATE.md updated."""
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+    runner = CliRunner()
+
+    planned = runner.invoke(
+        cli,
+        [
+            "start", "--epic", "ship the platform",
+            "--domain-goal", "ship auth api:backend",
+            "--domain-goal", "wire pipeline:infra",
+            "--task-id", "epic-42",
+        ],
+        catch_exceptions=False,
+    )
+    assert planned.exit_code == 0, planned.output
+
+    with StateStore(root / "data" / "db.sqlite") as store:
+        leads = store.tasks_by_parent("epic-42")
+        backend_lead, infra_lead = leads[0], leads[1]
+
+    # Approve only backend and resume: backend runs, infra stays untouched.
+    assert runner.invoke(cli, ["approve", backend_lead.id], catch_exceptions=False).exit_code == 0
+    partial = runner.invoke(cli, ["start"], catch_exceptions=False)
+    assert partial.exit_code == 0, partial.output
+
+    assert len(list(root.glob("module_*.py"))) == 1, "only the approved domain runs"
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert store.get_task(infra_lead.id).status == "pending_approval"
+        assert store.get_task("epic-42").status == "review", "epic waits for infra"
+    assert not (root / "domains" / "PROJECT_STATE.md").exists(), "no epic section until done"
+
+    # Approve infra and resume: everything runs, epic finalizes.
+    assert runner.invoke(cli, ["approve", infra_lead.id], catch_exceptions=False).exit_code == 0
+    final = runner.invoke(cli, ["start"], catch_exceptions=False)
+    assert final.exit_code == 0, final.output
+
+    assert len(list(root.glob("module_*.py"))) == 2
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert store.get_task("epic-42").status == "done"
+        report = store.latest_report("epic-42")
+        assert report is not None and report.agent == "architect:epic-42"
+        assert report.tests_passed
+    project_state = root / "domains" / "PROJECT_STATE.md"
+    state_text = project_state.read_text(encoding="utf-8")
+    assert "epic-42" in state_text and "backend" in state_text and "infra" in state_text
+    assert (root / "domains" / "backend" / "repo_map.md").is_file()
+
+
+def test_start_resume_without_any_epic_fails_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert result.exit_code != 0
+    assert "epic" in result.output.lower()
+
+
 def test_manage_command_runs_graph_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
 ) -> None:
