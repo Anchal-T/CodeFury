@@ -344,6 +344,11 @@ def _start_plan_mode(
     )
     with StateStore(base / config.paths.db) as store:
         store.init_schema()
+        if task_id is not None and store.get_task(task_id) is not None:
+            raise click.ClickException(
+                f"task id already exists: {task_id} — refusing to overwrite the epic "
+                "while its existing children stay keyed to it"
+            )
         leads = plan_epic(epic=epic, decomposer=StaticEpicDecomposer(pairs), store=store)
     if not leads:
         raise SystemExit(1)

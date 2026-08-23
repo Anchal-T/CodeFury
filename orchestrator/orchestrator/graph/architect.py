@@ -108,16 +108,26 @@ def run_approved_leads(
     epic: Task,
     lead_graph_factory: Callable[[Task], Any],
 ) -> list[dict]:
-    """Run each approved (pending) lead of the epic, sequentially.
+    """Run each approved lead of the epic, sequentially.
 
     ``pending_approval`` leads are skipped by query — the gate is enforced
-    here, not by convention. Returns one outcome dict per executed lead.
+    here, not by convention. A lead left ``in_progress`` by an interrupted
+    run is reset to ``pending`` and re-run (it must have been approved to
+    have started), so a killed session never deadlocks the epic. Returns one
+    outcome dict per executed lead.
     """
-    leads = [lead for lead in store.tasks_by_parent(epic.id) if lead.status == "pending"]
+    runnable: list[Task] = []
+    for lead in store.tasks_by_parent(epic.id):
+        if lead.status == "pending":
+            runnable.append(lead)
+        elif lead.status == "in_progress":
+            store.set_task_status(lead.id, "pending")
+            lead.status = "pending"
+            runnable.append(lead)
 
     async def _run() -> list[dict]:
         outcomes: list[dict] = []
-        for lead in leads:
+        for lead in runnable:
             graph = lead_graph_factory(lead)
             outcome = await graph.ainvoke({"lead_task": lead.model_dump()})
             outcomes.append(dict(outcome))

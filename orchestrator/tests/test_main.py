@@ -137,6 +137,32 @@ def test_start_requires_domain_goals_with_epic(
     assert bad.exit_code != 0
 
 
+def test_start_rejects_duplicate_epic_task_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    """Re-planning under an existing --task-id must fail, not overwrite the
+    epic while its old children stay keyed to the same parent id."""
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+    runner = CliRunner()
+    args = [
+        "start", "--epic", "g", "--domain-goal", "a:backend", "--domain-goal", "b:infra",
+        "--task-id", "epic-dup",
+    ]
+
+    first = runner.invoke(cli, args, catch_exceptions=False)
+    assert first.exit_code == 0, first.output
+
+    second = runner.invoke(cli, args)
+    assert second.exit_code != 0
+    assert "epic-dup" in second.output
+
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert len(store.tasks_by_parent("epic-dup")) == 2, "no stale children appended"
+
+
 def test_start_resume_runs_only_approved_leads_and_finishes_epic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
 ) -> None:

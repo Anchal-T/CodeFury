@@ -156,3 +156,30 @@ def test_run_approved_leads_runs_only_approved(store: StateStore) -> None:
     assert received == [leads[0].id]
     assert len(outcomes) == 1
     assert outcomes[0]["outcome"] == "review"
+
+
+def test_run_approved_leads_recovers_interrupted_leads(store: StateStore) -> None:
+    """A lead left in_progress by a killed run must be re-run on resume —
+    otherwise the epic can never finalize and nothing reports why."""
+    epic, leads = _plan_two_leads(store)
+    store.set_task_status(leads[0].id, "pending")      # approved, not yet started
+    store.set_task_status(leads[1].id, "in_progress")  # interrupted mid-run
+
+    received: list[Task] = []
+
+    class StubGraph:
+        async def ainvoke(self, state: dict) -> dict:
+            return {"outcome": "review"}
+
+    def factory(lead: Task) -> StubGraph:
+        received.append(lead)
+        return StubGraph()
+
+    outcomes = run_approved_leads(
+        store=store, epic=store.get_task("epic-1"), lead_graph_factory=factory
+    )
+    assert [lead.id for lead in received] == [leads[0].id, leads[1].id]
+    assert all(lead.status == "pending" for lead in received), (
+        "interrupted leads are reset before re-dispatch"
+    )
+    assert len(outcomes) == 2
