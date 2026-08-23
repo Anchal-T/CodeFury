@@ -29,7 +29,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer + DomainDecomposer protocols; StaticDecomposer (level 0) and StaticDomainDecomposer (level 1) breakdowns.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
 - `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with semaphore concurrency cap.
-- `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out and retry routing.
+- `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, and per-manager result summaries.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
 - `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/diff/merge/discard/cleanup, repo-root discovery, MergeConflictError with conflicted-file extraction.
@@ -58,4 +58,4 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer and StaticDomainDecomposer child-task tests.
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
 - `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
-- `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition.
+- `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition, manager_results contract.
