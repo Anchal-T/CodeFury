@@ -98,3 +98,20 @@ def test_valid_worker_timeout_accepted(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("execution:\n  worker_timeout_s: 90\n", encoding="utf-8")
     assert load_config(config_file).execution.worker_timeout_s == 90.0
+
+
+def test_non_mapping_top_level_rejected(tmp_path: Path) -> None:
+    """A scalar/list yaml root must fail with an actionable message, not an
+    AttributeError from deep inside the loader."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("- item\n- another\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="mapping"):
+        load_config(config_file)
+
+
+@pytest.mark.parametrize("section", ["paths", "execution", "concurrency", "retries"])
+def test_non_mapping_section_rejected(tmp_path: Path, section: str) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"{section}: just-a-string\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=section):
+        load_config(config_file)

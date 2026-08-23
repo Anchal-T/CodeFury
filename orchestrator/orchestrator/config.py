@@ -86,12 +86,25 @@ def load_config(path: Path | None = None) -> Config:
     """Load config.yaml; missing file or sections fall back to defaults."""
     data: dict = {}
     if path is not None and path.is_file():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(
+                f"{path}: top-level config must be a mapping, got {type(loaded).__name__}"
+            )
+        data = loaded or {}
 
-    paths_raw = data.get("paths") or {}
-    exec_raw = data.get("execution") or {}
-    conc_raw = data.get("concurrency") or {}
-    retries_raw = data.get("retries") or {}
+    def _section(name: str) -> dict:
+        raw = data.get(name)
+        if raw is not None and not isinstance(raw, dict):
+            raise ValueError(
+                f"{path}: config section '{name}' must be a mapping, got {type(raw).__name__}"
+            )
+        return raw or {}
+
+    paths_raw = _section("paths")
+    exec_raw = _section("execution")
+    conc_raw = _section("concurrency")
+    retries_raw = _section("retries")
 
     config = Config(
         paths=PathsConfig(
