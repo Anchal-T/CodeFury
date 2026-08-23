@@ -32,7 +32,12 @@ def main() -> int:
         print("fake worker: simulated failure (FAKE_WORKER_FAIL=1)", file=sys.stderr)
         return 1
 
-    role = os.environ.get("FAKE_WORKER_ROLE") or "worker"
+    # Reconciliation dispatches are recognized from the orchestrator's
+    # '<task>-reconcile-<n>' id convention embedded in the prompt; an explicit
+    # FAKE_WORKER_ROLE overrides the detection.
+    role = os.environ.get("FAKE_WORKER_ROLE")
+    if not role:
+        role = "reconciler" if "-reconcile-" in prompt else "worker"
     target = os.environ.get("FAKE_WORKER_TARGET")
     if target:
         digest = hashlib.sha1(prompt.encode()).hexdigest()[:8]

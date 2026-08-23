@@ -166,22 +166,25 @@ def make_worker_node(
     test_command: list[str],
     max_workers: int = 3,
     tests_timeout: float = TEST_TIMEOUT_S,
+    semaphore: asyncio.Semaphore | None = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
     The semaphore enforces config concurrency.max_workers (plan §4): never
     more worker subprocesses than the budget allows, real parallelism below
-    it. The blocking pipeline runs in a thread so one implementation serves
-    both the CLI and the graph.
+    it. Pass an injected ``semaphore`` to share one cap across graphs (the
+    Domain Lead reuses the manager graph's cap so the global worker budget
+    holds). The blocking pipeline runs in a thread so one implementation
+    serves both the CLI and the graph.
     """
     if max_workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
-    semaphore = asyncio.Semaphore(max_workers)
+    sem = semaphore if semaphore is not None else asyncio.Semaphore(max_workers)
 
     async def node(state: dict) -> dict:
         task = Task.model_validate(state["task"])
         attempt = int(state.get("attempt", 1))
-        async with semaphore:
+        async with sem:
             report = await asyncio.to_thread(
                 run_worker_task,
                 task,

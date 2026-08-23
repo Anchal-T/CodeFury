@@ -30,3 +30,28 @@ class OrchestratorState(TypedDict, total=False):
     retrying: list                      # current retry batch (overwritten per round)
     blockers: Annotated[list[str], operator.add]           # aggregate blockers
     manager_results: Annotated[list[dict], operator.add]   # one summary per finished manager
+
+
+class LeadState(TypedDict, total=False):
+    """Domain Lead graph state.
+
+    Channels shared with the nested manager subgraphs (reports, attempts,
+    merged, dispatched, blockers, manager_results) carry reducers so parallel
+    subgraph outputs aggregate; keys the lead does not declare (final_status,
+    worker_tasks, retrying) are dropped from subgraph outputs. The terminal
+    key is `outcome` — written only by the lead, never by subgraphs.
+    """
+
+    lead_task: dict                    # serialized level-2 Task
+    manager_tasks: list                # created level-1 tasks (written once)
+    manager_results: Annotated[list[dict], operator.add]
+    reports: Annotated[list[dict], operator.add]
+    attempts: Annotated[dict[str, int], merge_attempts]
+    merged: Annotated[list[str], operator.add]             # ids merged by the lead
+    dispatched: Annotated[list[str], operator.add]
+    blockers: Annotated[list[str], operator.add]
+    escalated: Annotated[list[str], operator.add]          # ids failed for good
+    resolved_managers: Annotated[list[str], operator.add]  # manager ids fully handled
+    reconcile_tasks: list              # current recon batch (overwritten per round)
+    reconcile_attempts: Annotated[dict[str, int], merge_attempts]  # manager_id → dispatches
+    outcome: str                       # terminal status: "review" | "failed"

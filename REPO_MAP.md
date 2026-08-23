@@ -13,7 +13,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
-- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing, with FAKE_WORKER_FAIL=1 failure mode (dev utility, not imported by the package).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure mode, target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
 - `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/start/status/approve/logs); run drives Phase 1, manage drives the Phase 2 graph.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
@@ -25,10 +25,11 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 node: epic ownership, human interaction.
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 lead review: conflict-only reconciliation dispatch (capped once), immediate escalation of other failures.
 - `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
-- `orchestrator/orchestrator/graph/state.py` — OrchestratorState schema with fan-out-safe reducers (append lists, max-merge attempts).
-- `orchestrator/orchestrator/graph/decompose.py` — Decomposer + DomainDecomposer protocols; StaticDecomposer (level 0) and StaticDomainDecomposer (level 1) breakdowns.
+- `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
+- `orchestrator/orchestrator/graph/decompose.py` — Decomposer + DomainDecomposer protocols; StaticDecomposer (level 0), StaticDomainDecomposer (level 1), SingleWorkerDecomposer.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with semaphore concurrency cap.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with injectable semaphore concurrency cap.
+- `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation dispatch, repo_map.md knowledge append.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, and per-manager result summaries.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
@@ -56,6 +57,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
 - `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests + async worker node and semaphore cap tests.
 - `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer and StaticDomainDecomposer child-task tests.
+- `orchestrator/tests/graph/test_lead_graph.py` — lead graph E2E: clean managers, conflict→reconciliation, escalation, empty decomposition.
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
 - `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
 - `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition, manager_results contract.

@@ -114,3 +114,24 @@ def test_fake_worker_reconciler_role_labels_content(
     assert proc.returncode == 0, proc.stderr
     text = (tmp_path / "shared.txt").read_text(encoding="utf-8")
     assert "reconciler" in text
+
+
+def test_fake_worker_detects_reconciler_from_prompt_id(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """The orchestrator's '<task>-reconcile-<n>' id convention marks a
+    reconciliation dispatch — the fake worker self-labels from it."""
+    env = {**os.environ, "FAKE_WORKER_TARGET": "shared.txt"}
+    prompt = 'task json {"id": "mgr-1-reconcile-1", ...}'
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), prompt],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = (tmp_path / "shared.txt").read_text(encoding="utf-8")
+    assert "reconciler" in text

@@ -33,8 +33,13 @@ def build_graph(
     test_command: list[str],
     max_workers: int = 3,
     tests_timeout: float = TEST_TIMEOUT_S,
+    worker_semaphore=None,
 ):
-    """Assemble and compile the Manager/Worker StateGraph with injected deps."""
+    """Assemble and compile the Manager/Worker StateGraph with injected deps.
+
+    ``worker_semaphore`` lets a caller share one concurrency cap across
+    graphs (the Domain Lead passes its own so the global worker budget holds).
+    """
     worker = make_worker_node(
         store=store,
         worktrees=worktrees,
@@ -42,6 +47,7 @@ def build_graph(
         test_command=test_command,
         max_workers=max_workers,
         tests_timeout=tests_timeout,
+        semaphore=worker_semaphore,
     )
 
     def _result(

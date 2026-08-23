@@ -65,3 +65,12 @@ class StaticDomainDecomposer:
 
     def decompose(self, task: Task) -> list[Task]:
         return _children(task, level=1, goals=self.manager_goals)
+
+
+class SingleWorkerDecomposer:
+    """Default manager-side decomposition inside a lead run: one worker
+    carrying the manager's own goal (deterministic; swap in an LLM-backed
+    Decomposer per manager when one is available)."""
+
+    def decompose(self, task: Task) -> list[Task]:
+        return StaticDecomposer([task.goal]).decompose(task)
