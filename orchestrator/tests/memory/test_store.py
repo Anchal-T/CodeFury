@@ -127,3 +127,40 @@ def test_concurrent_writes_from_threads(store: StateStore) -> None:
     reports_count = store.connection().execute("SELECT COUNT(*) FROM reports").fetchone()[0]
     assert tasks_count == 80
     assert reports_count == 80
+
+
+def test_set_task_status_atomic_under_mixed_concurrency(store: StateStore) -> None:
+    """set_task_status is a read-modify-write; racing it against whole-object
+    save_task calls must never corrupt the row or lose the task entirely."""
+    import threading
+
+    store.save_task(make_task("race-1"))
+    errors: list[Exception] = []
+    statuses = ("in_progress", "review", "failed", "done")
+
+    def status_flipper() -> None:
+        try:
+            for n in range(60):
+                store.set_task_status("race-1", statuses[n % len(statuses)])
+        except Exception as exc:  # noqa: BLE001 — recorded and asserted below
+            errors.append(exc)
+
+    def object_saver() -> None:
+        try:
+            for _ in range(60):
+                store.save_task(make_task("race-1", status="pending"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=status_flipper), threading.Thread(target=object_saver)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    final = store.get_task("race-1")
+    assert final is not None, "the raced task must survive"
+    assert final.status in {"pending", *statuses}, (
+        "row must always reflect one coherent write, never an interleaved one"
+    )
