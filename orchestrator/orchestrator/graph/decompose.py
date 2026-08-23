@@ -30,7 +30,15 @@ def is_decomposer(obj: object) -> bool:
     return hasattr(obj, "decompose") and callable(obj.decompose)
 
 
-def _children(task: Task, *, level: int, goals: list[str]) -> list[Task]:
+def _children(
+    task: Task,
+    *,
+    level: int,
+    goals: list[str],
+    status: str = "pending",
+    domains: list[str] | None = None,
+) -> list[Task]:
+    domains = domains or [task.domain] * len(goals)
     return [
         Task(
             id=f"{task.id}-{index + 1}-{uuid4().hex[:6]}",
@@ -39,11 +47,11 @@ def _children(task: Task, *, level: int, goals: list[str]) -> list[Task]:
             goal=goal,
             deliverable=goal,
             dependencies=[],
-            status="pending",
+            status=status,  # type: ignore[arg-type]
             assigned_to=None,
-            domain=task.domain,
+            domain=domain,
         )
-        for index, goal in enumerate(goals)
+        for index, (goal, domain) in enumerate(zip(goals, domains))
     ]
 
 
@@ -74,3 +82,37 @@ class SingleWorkerDecomposer:
 
     def decompose(self, task: Task) -> list[Task]:
         return StaticDecomposer([task.goal]).decompose(task)
+
+
+class SingleManagerDecomposer:
+    """Default lead-side decomposition inside an architect run: one manager
+    carrying the lead's own goal (deterministic; swap in an LLM-backed
+    DomainDecomposer per lead when one is available)."""
+
+    def decompose(self, task: Task) -> list[Task]:
+        return StaticDomainDecomposer([task.goal]).decompose(task)
+
+
+class EpicDecomposer(Protocol):
+    """Turns an epic Task into its level-2 domain-lead Tasks."""
+
+    def decompose(self, task: Task) -> list[Task]: ...
+
+
+class StaticEpicDecomposer:
+    """Decomposes an epic into one lead task per (goal, domain) pair.
+
+    Children are created in ``pending_approval`` — the Architect's plan is
+    inert until a human approves each domain via the CLI (plan §9 Phase 4).
+    """
+
+    def __init__(self, domain_goals: list[tuple[str, str]]) -> None:
+        for goal, domain in domain_goals:
+            if not domain:
+                raise ValueError(f"epic entry {goal!r} is missing a domain")
+        self.domain_goals = list(domain_goals)
+
+    def decompose(self, task: Task) -> list[Task]:
+        goals = [goal for goal, _domain in self.domain_goals]
+        domains = [domain for _goal, domain in self.domain_goals]
+        return _children(task, level=2, goals=goals, status="pending_approval", domains=domains)
