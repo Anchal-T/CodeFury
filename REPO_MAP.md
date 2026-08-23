@@ -23,7 +23,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 node: epic ownership, human interaction.
-- `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 node: per-domain coordination, conflict resolution.
+- `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 lead review: conflict-only reconciliation dispatch (capped once), immediate escalation of other failures.
+- `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState schema with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer + DomainDecomposer protocols; StaticDecomposer (level 0) and StaticDomainDecomposer (level 1) breakdowns.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
