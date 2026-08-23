@@ -61,3 +61,50 @@ def test_manage_command_runs_graph_end_to_end(
     conn.close()
     assert manager_reports == 1
     assert worker_reports == 2
+
+
+def test_lead_command_runs_lead_graph_end_to_end(
+    tmp_path: Path, monkeypatch, python_bin: str
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    config = {
+        "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
+        "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces", "domains": "./domains"},
+        "retries": {"max_worker_retries": 1, "max_reconcile_attempts": 1},
+    }
+    (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "lead",
+            "--goal", "ship the backend slice",
+            "--manager-goal", "slice one",
+            "--manager-goal", "slice two",
+            "--domain", "backend",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "review" in result.output
+    assert len(list(root.glob("module_*.py"))) == 2
+
+    import sqlite3
+
+    conn = sqlite3.connect(root / "data" / "db.sqlite")
+    lead_reports = conn.execute(
+        "SELECT COUNT(*) FROM reports WHERE agent LIKE 'lead:%'"
+    ).fetchone()[0]
+    manager_tasks = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE level = 1"
+    ).fetchone()[0]
+    conn.close()
+    assert lead_reports == 1
+    assert manager_tasks == 2
+
+    repo_map = root / "domains" / "backend" / "repo_map.md"
+    assert repo_map.is_file(), "lead must maintain the domain repo map"
+    assert "## lead run" in repo_map.read_text(encoding="utf-8")

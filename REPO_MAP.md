@@ -15,7 +15,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure mode, target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/start/status/approve/logs); run drives Phase 1, manage drives the Phase 2 graph.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/start/status/approve/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
@@ -52,7 +52,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/test_contracts.py` — Task/Report contract tests: domain field, conflict-blocker convention.
 - `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override.
 - `orchestrator/tests/test_prompts.py` — worker prompt content tests.
-- `orchestrator/tests/test_main.py` — manage CLI end-to-end test via CliRunner.
+- `orchestrator/tests/test_main.py` — manage and lead CLI end-to-end tests via CliRunner.
 - `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode.
 - `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
 - `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests + async worker node and semaphore cap tests.

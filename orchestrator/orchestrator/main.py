@@ -18,8 +18,10 @@ from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_r
 from orchestrator.execution.zcode_runner import ZCodeRunner
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.build_graph import build_graph
-from orchestrator.graph.decompose import StaticDecomposer
+from orchestrator.graph.decompose import StaticDecomposer, StaticDomainDecomposer
+from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.graph.worker import run_worker_task
+from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
 
 
@@ -138,6 +140,77 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
         f"  blockers: {result.get('blockers') or 'none'}"
     )
     if final != "review":
+        raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--goal", required=True, help="What the domain should achieve together.")
+@click.option(
+    "--manager-goal", "manager_goals", multiple=True, required=True,
+    help="One manager task goal per flag.",
+)
+@click.option("--domain", required=True, help="Domain name (owns domains/<domain>/repo_map.md).")
+@click.option("--task-id", default=None, help="Stable lead task id (default: generated).")
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def lead(
+    goal: str,
+    manager_goals: tuple[str, ...],
+    domain: str,
+    task_id: str | None,
+    config_path: Path,
+) -> None:
+    """Run a Domain Lead task: coordinate managers and resolve conflicts (Phase 3)."""
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    repo_root = find_repo_root(Path.cwd())
+    parent = Task(
+        id=task_id or f"lead-{uuid4().hex[:8]}",
+        parent_id=None,
+        level=2,
+        goal=goal,
+        deliverable=goal,
+        dependencies=[],
+        status="pending",
+        assigned_to=None,
+        domain=domain,
+    )
+    with StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        graph = build_lead_graph(
+            store=store,
+            worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
+            runner=ZCodeRunner(
+                command=config.execution.zcode_command,
+                timeout=config.execution.worker_timeout_s,
+            ),
+            decomposer=StaticDomainDecomposer(list(manager_goals)),
+            test_command=config.execution.test_command,
+            max_workers=config.concurrency.max_workers,
+            max_reconcile_attempts=config.retries.max_reconcile_attempts,
+            knowledge=KnowledgeDocs(),
+            domains_dir=base / config.paths.domains,
+        )
+        click.echo(
+            f"[lead] task {parent.id} → {len(manager_goals)} manager(s), "
+            f"cap {config.concurrency.max_workers}, reconcile cap {config.retries.max_reconcile_attempts}"
+        )
+        result = asyncio.run(graph.ainvoke({"lead_task": parent.model_dump()}))
+
+    outcome = result.get("outcome", "unknown")
+    click.echo(
+        f"\n[lead report] outcome={outcome}\n"
+        f"  managers: {result.get('manager_results') or 'none'}\n"
+        f"  reconciliations merged: {result.get('merged') or 'none'}\n"
+        f"  escalated: {result.get('escalated') or 'none'}\n"
+        f"  blockers: {result.get('blockers') or 'none'}"
+    )
+    if outcome != "review":
         raise SystemExit(1)
 
 
