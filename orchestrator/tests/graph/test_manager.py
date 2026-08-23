@@ -20,12 +20,10 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 @pytest.fixture()
-def git_repo(tmp_path: Path) -> Path:
+def git_repo(tmp_path: Path, git_init) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    _git(["init", "-b", "main"], cwd=root)
-    _git(["config", "user.email", "test@example.com"], cwd=root)
-    _git(["config", "user.name", "Test"], cwd=root)
+    git_init(root)
     (root / "README.md").write_text("init\n", encoding="utf-8")
     _git(["add", "-A"], cwd=root)
     _git(["commit", "-m", "init"], cwd=root)

@@ -3,6 +3,7 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -16,21 +17,18 @@ def _git(args: list[str], cwd: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-def _init_repo(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    _git(["init", "-b", "main"], cwd=root)
-    _git(["config", "user.email", "test@example.com"], cwd=root)
-    _git(["config", "user.name", "Test"], cwd=root)
+def _init_repo(root: Path, git_init) -> None:
+    git_init(root)
     (root / "README.md").write_text("init\n", encoding="utf-8")
     _git(["add", "-A"], cwd=root)
     _git(["commit", "-m", "init"], cwd=root)
 
 
 def test_manage_command_runs_graph_end_to_end(
-    tmp_path: Path, monkeypatch, python_bin: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
 ) -> None:
     root = tmp_path / "repo"
-    _init_repo(root)
+    _init_repo(root, git_init)
     config = {
         "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
         "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces"},
@@ -64,10 +62,10 @@ def test_manage_command_runs_graph_end_to_end(
 
 
 def test_lead_command_runs_lead_graph_end_to_end(
-    tmp_path: Path, monkeypatch, python_bin: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
 ) -> None:
     root = tmp_path / "repo"
-    _init_repo(root)
+    _init_repo(root, git_init)
     config = {
         "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
         "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces", "domains": "./domains"},
