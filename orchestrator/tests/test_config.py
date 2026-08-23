@@ -63,3 +63,22 @@ def test_non_positive_max_workers_rejected(tmp_path: Path) -> None:
     config_file.write_text("concurrency:\n  max_workers: 0\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(config_file)
+
+
+def test_default_reconcile_attempts_is_one() -> None:
+    config = load_config(Path("does-not-exist.yaml"))
+    assert config.retries.max_reconcile_attempts == 1
+
+
+def test_custom_yaml_overrides_reconcile_attempts(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("retries:\n  max_reconcile_attempts: 2\n", encoding="utf-8")
+    config = load_config(config_file)
+    assert config.retries.max_reconcile_attempts == 2
+
+
+def test_negative_reconcile_attempts_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("retries:\n  max_reconcile_attempts: -1\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(config_file)
