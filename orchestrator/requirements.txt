@@ -1,6 +1,6 @@
 # Core
 langgraph
-langgraph-checkpoint-sqlite   # SqliteSaver checkpointer for LangGraph
+langgraph-checkpoint-sqlite==3.1.1   # SqliteSaver checkpointer for LangGraph
 pydantic
 pyyaml
 psutil

@@ -139,6 +139,8 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
             retry_policy=RetryPolicy.from_config(config),
             test_command=config.execution.test_command,
             max_workers=config.concurrency.max_workers,
+            knowledge=KnowledgeDocs(),
+            domains_dir=base / config.paths.domains,
         )
         click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
         result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))

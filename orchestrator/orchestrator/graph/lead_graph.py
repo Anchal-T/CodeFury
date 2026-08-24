@@ -65,13 +65,21 @@ def build_lead_graph(
     domains_dir: Path | None = None,
     worker_decomposer=None,
     retry_policy: RetryPolicy | None = None,
+    checkpointer=None,
 ):
-    """Assemble and compile Architect-less lead → managers → workers graph."""
+    """Assemble and compile Architect-less lead → managers → workers graph.
+
+    ``checkpointer`` (a LangGraph BaseCheckpointSaver, typically
+    ``StateStore.checkpointer()``) makes the whole run — including the nested
+    manager/worker subgraphs — resumable under a stable
+    ``thread_id = lead:<task id>``; None keeps runs non-persistent.
+    """
     knowledge = knowledge or KnowledgeDocs()
     retry_policy = retry_policy or RetryPolicy()
     semaphore = asyncio.Semaphore(max_workers)
 
     # The nested Manager/Worker graph shares this process's single worker cap.
+    # Tier-1 memory is wired into every worker via the shared KnowledgeDocs.
     manager_graph = build_graph(
         store=store,
         worktrees=worktrees,
@@ -82,6 +90,8 @@ def build_lead_graph(
         max_workers=max_workers,
         tests_timeout=tests_timeout,
         worker_semaphore=semaphore,
+        knowledge=knowledge,
+        domains_dir=domains_dir,
     )
     reconcile_worker = make_worker_node(
         store=store,
@@ -91,6 +101,8 @@ def build_lead_graph(
         max_workers=max_workers,
         tests_timeout=tests_timeout,
         semaphore=semaphore,
+        knowledge=knowledge,
+        domains_dir=domains_dir,
     )
 
     recorder = OutcomeRecorder(
@@ -151,7 +163,12 @@ def build_lead_graph(
         if not state.get("manager_tasks"):
             lead_task.status = "in_progress"
             store.save_task(lead_task)
-            children = decomposer.decompose(lead_task)
+            planning_context = ""
+            if domains_dir is not None and lead_task.domain:
+                planning_context = knowledge.read_latest(
+                    domains_dir / lead_task.domain / "repo_map.md"
+                )
+            children = decomposer.decompose(lead_task, context=planning_context)
             if not children:
                 blockers = ["lead produced no manager tasks"]
                 _finalize(
@@ -270,4 +287,4 @@ def build_lead_graph(
     builder.add_conditional_edges("lead", route, ["manager", "worker", END])
     builder.add_edge("manager", "lead")
     builder.add_edge("worker", "lead")
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)

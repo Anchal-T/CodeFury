@@ -69,7 +69,7 @@ def start(
         knowledge = KnowledgeDocs()
         domains_dir = base / config.paths.domains
 
-        def lead_graph_factory(lead: Task):
+        def lead_graph_factory(lead: Task, checkpointer):
             return build_lead_graph(
                 store=store,
                 worktrees=worktrees,
@@ -80,6 +80,7 @@ def start(
                 max_reconcile_attempts=config.retries.max_reconcile_attempts,
                 knowledge=knowledge,
                 domains_dir=domains_dir,
+                checkpointer=checkpointer,
             )
 
         click.echo(f"[start] resuming epic {epic.id} ('{epic.goal}')")
@@ -187,7 +188,15 @@ def _start_plan_mode(
                 err=True,
             )
             raise click.ClickException(f"task id already exists: {task_id}")
-        leads = plan_epic(epic=epic, decomposer=StaticEpicDecomposer(pairs), store=store)
+        domains_dir = base / config.paths.domains
+        knowledge = KnowledgeDocs()
+        planning_context = knowledge.read_latest(domains_dir / "PROJECT_STATE.md")
+        leads = plan_epic(
+            epic=epic,
+            decomposer=StaticEpicDecomposer(pairs),
+            store=store,
+            planning_context=planning_context,
+        )
     if not leads:
         raise SystemExit(1)
     click.echo(f"[start] epic {epic.id} planned — {len(leads)} domain lead(s) awaiting approval:")

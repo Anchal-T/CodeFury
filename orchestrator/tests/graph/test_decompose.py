@@ -143,3 +143,19 @@ def test_single_manager_decomposer_yields_one_inheriting_manager() -> None:
     assert child.goal == lead.goal
     assert child.domain == "backend", "manager inherits the lead's domain"
     assert child.status == "pending"
+
+
+def test_all_static_decomposers_accept_optional_planning_context() -> None:
+    """Phase 5 planning seam: decomposers may receive the latest knowledge
+    section; deterministic fakes ignore it but must tolerate the kwarg."""
+    context = "latest knowledge section text"
+    assert StaticDecomposer(["a"]).decompose(make_parent(), context=context)
+    assert StaticDomainDecomposer(["a"]).decompose(make_lead(), context=context)
+    assert StaticEpicDecomposer([("g", "d")]).decompose(make_epic(), context=context)
+
+    from orchestrator.graph.decompose import SingleWorkerDecomposer
+
+    worker_children = SingleWorkerDecomposer().decompose(make_parent(), context=context)
+    manager_children = SingleManagerDecomposer().decompose(make_lead(), context=context)
+    assert len(worker_children) == 1
+    assert len(manager_children) == 1
