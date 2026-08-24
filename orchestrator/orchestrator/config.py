@@ -41,12 +41,27 @@ class PathsConfig:
     workspaces: Path = Path("./workspaces")
     domains: Path = Path("./domains")
     db: Path = Path("./data/orchestrator.db")
+    logs: Path = Path("./logs")
 
 
 @dataclass
 class ConcurrencyConfig:
     max_workers: int = 3
     max_managers: int = 2
+
+
+@dataclass
+class BudgetsConfig:
+    """Per-level token caps (plan §3.6); ``None`` disables that level's cap.
+
+    A cap counts the tokens a level spends ITSELF (today: level-0 worker
+    subprocesses); aggregates are never re-counted at higher levels.
+    """
+
+    worker_tokens: int | None = 50000
+    manager_tokens: int | None = 150000
+    domain_lead_tokens: int | None = 300000
+    architect_tokens: int | None = 500000
 
 
 @dataclass
@@ -62,6 +77,7 @@ class Config:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
     retries: RetryConfig = field(default_factory=RetryConfig)
+    budgets: BudgetsConfig = field(default_factory=BudgetsConfig)
     raw: dict = field(default_factory=dict)
 
 
@@ -90,6 +106,26 @@ def _positive_float(section: dict, key: str, default: float) -> float:
         raise ValueError(
             f"execution.{key} must be a positive finite number, got {raw!r}"
         )
+    return value
+
+
+def _token_cap(section: dict, key: str, default: int | None) -> int | None:
+    """Coerce a budget cap to a non-negative int; explicit null = no cap.
+
+    A missing key falls back to the tuned default; an explicit ``null``
+    deliberately disables the cap — the two must stay distinguishable.
+    """
+    if key not in section:
+        return default
+    raw = section[key]
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"budgets.{key} must be an integer, got {raw!r}") from err
+    if value < 0:
+        raise ValueError(f"budgets.{key} must be >= 0 (or null for no cap), got {value}")
     return value
 
 
@@ -122,12 +158,14 @@ def load_config(path: Path | None = None) -> Config:
     exec_raw = _section("execution")
     conc_raw = _section("concurrency")
     retries_raw = _section("retries")
+    budgets_raw = _section("budgets")
 
     config = Config(
         paths=PathsConfig(
             workspaces=Path(paths_raw.get("workspaces", PathsConfig.workspaces)),
             domains=Path(paths_raw.get("domains", PathsConfig.domains)),
             db=Path(paths_raw.get("db", PathsConfig.db)),
+            logs=Path(paths_raw.get("logs", PathsConfig.logs)),
         ),
         execution=ExecutionConfig(
             zcode_command=_as_list(exec_raw.get("zcode_command")) or list(DEFAULT_ZCODE_COMMAND),
@@ -145,6 +183,16 @@ def load_config(path: Path | None = None) -> Config:
             ),
             max_reconcile_attempts=int(
                 retries_raw.get("max_reconcile_attempts", RetryConfig.max_reconcile_attempts)
+            ),
+        ),
+        budgets=BudgetsConfig(
+            worker_tokens=_token_cap(budgets_raw, "worker_tokens", BudgetsConfig.worker_tokens),
+            manager_tokens=_token_cap(budgets_raw, "manager_tokens", BudgetsConfig.manager_tokens),
+            domain_lead_tokens=_token_cap(
+                budgets_raw, "domain_lead_tokens", BudgetsConfig.domain_lead_tokens
+            ),
+            architect_tokens=_token_cap(
+                budgets_raw, "architect_tokens", BudgetsConfig.architect_tokens
             ),
         ),
         raw=data,

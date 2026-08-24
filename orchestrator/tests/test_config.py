@@ -49,6 +49,60 @@ def test_missing_file_falls_back_to_defaults() -> None:
     assert config.execution.zcode_command == ["zcode"]
     assert config.execution.test_command == DEFAULT_TEST_COMMAND
     assert config.paths.db == Path("./data/orchestrator.db")
+    assert config.paths.logs == Path("./logs")
+    assert config.budgets.worker_tokens == 50000
+    assert config.budgets.manager_tokens == 150000
+    assert config.budgets.domain_lead_tokens == 300000
+    assert config.budgets.architect_tokens == 500000
+
+
+def test_budgets_load_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "budgets:\n"
+        "  worker_tokens: 100\n"
+        "  manager_tokens: 200\n"
+        "  domain_lead_tokens: 300\n"
+        "  architect_tokens: 400\n",
+        encoding="utf-8",
+    )
+    budgets = load_config(config_file).budgets
+    assert budgets.worker_tokens == 100
+    assert budgets.manager_tokens == 200
+    assert budgets.domain_lead_tokens == 300
+    assert budgets.architect_tokens == 400
+
+
+def test_null_budget_disables_cap(tmp_path: Path) -> None:
+    """An explicit null means 'no cap' — distinct from a missing key, which
+    falls back to the tuned default (a surprise cap on fresh checkouts)."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("budgets:\n  worker_tokens: null\n", encoding="utf-8")
+    budgets = load_config(config_file).budgets
+    assert budgets.worker_tokens is None
+    assert budgets.manager_tokens == 150000
+
+
+def test_negative_budget_rejected(tmp_path: Path) -> None:
+    """A negative cap would block every dispatch instantly while looking like
+    a tuned value — reject it at load time with the key named."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("budgets:\n  manager_tokens: -1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="manager_tokens"):
+        load_config(config_file)
+
+
+def test_non_numeric_budget_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("budgets:\n  worker_tokens: lots\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="worker_tokens"):
+        load_config(config_file)
+
+
+def test_logs_path_override(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("paths:\n  logs: ./var/runlog\n", encoding="utf-8")
+    assert load_config(config_file).paths.logs == Path("./var/runlog")
 
 
 def test_custom_yaml_sections(tmp_path: Path) -> None:

@@ -19,6 +19,10 @@ Modes (environment variables):
     FAKE_WORKER_CONTENT=<text>      extra verbatim line appended to TARGET
     FAKE_WORKER_ROLE=<name>         label written into the output (e.g.
                                     "reconciler" for Domain Lead demos)
+    FAKE_WORKER_TOKENS=<n>          token usage reported on stdout as a
+                                    'TOKENS_USED: <n>' line (default 1000) —
+                                    the orchestrator parses it for budget
+                                    accounting (Phase 6)
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ import os
 import sys
 import time
 from pathlib import Path
+
+DEFAULT_TOKENS = 1000
 
 
 def main() -> int:
@@ -47,6 +53,8 @@ def main() -> int:
     role = os.environ.get("FAKE_WORKER_ROLE")
     if not role:
         role = "reconciler" if "-reconcile-" in prompt else "worker"
+    tokens_used = int(os.environ.get("FAKE_WORKER_TOKENS", DEFAULT_TOKENS))
+    print(f"TOKENS_USED: {tokens_used}")
     target = os.environ.get("FAKE_WORKER_TARGET")
     if target:
         digest = hashlib.sha1(prompt.encode()).hexdigest()[:8]

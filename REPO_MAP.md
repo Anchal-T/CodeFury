@@ -9,19 +9,24 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator-build-plan.md` — architecture & phased build plan (untracked, local-only).
 - `orchestrator/.env.example` — template for secrets (Z_AI_API_KEY).
 - `orchestrator/.gitignore` — ignores Python caches, .venv, .env, and ephemeral workspaces/data/logs.
-- `orchestrator/config.yaml` — budgets, concurrency caps, model effort mapping, paths, execution settings (worker/test commands).
+- `orchestrator/config.yaml` — budgets (per-level token caps), concurrency caps, model effort mapping, paths (incl. logs), execution settings (worker/test commands).
 - `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
+- `orchestrator/data/` — runtime SQLite databases (gitignored).
+- `orchestrator/domains/` — Tier-1 knowledge docs maintained by leads/architect (gitignored at runtime).
+- `orchestrator/logs/` — JSONL run logs, one run_<ts>.jsonl per invocation (gitignored).
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
-- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; registers the Phase 4 epic commands.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
+- `orchestrator/orchestrator/cli_status.py` — read-only CLI helpers: task-tree renderer (orphan-safe, token display) and JSONL tailing (newest-run pick, last-N print, partial-line-safe follow loop).
+- `orchestrator/tests/test_cli_status.py` — tree rendering, newest-file selection, tail printing, follow-loop partial-line holdback tests.
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
-- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
+- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries/budgets) with ZCODE_CMD env override and concurrency/budget validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
-- `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
+- `orchestrator/orchestrator/logging_setup.py` — thread-safe JSONL RunLogger; setup_logging opens logs/run_<UTC ts>.jsonl per invocation.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 epic planning with the pending_approval gate, epic finalization + PROJECT_STATE.md, and the checkpoint-aware approved-leads resume driver (stable thread ids).
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 lead review: conflict-only reconciliation dispatch (capped once), immediate escalation of other failures.
@@ -29,7 +34,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer/DomainDecomposer/EpicDecomposer protocols with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): TOKENS_USED attribution, budget-gated dispatch, task_start/task_end events, async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
 - `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, and Tier-1 knowledge + checkpoint wiring.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
@@ -38,14 +43,14 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo, incl. typed merge-conflict errors.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage + typed round-trips and parent/status queries; open_checkpointer() shares this one connection.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage, typed round-trips, parent/status queries, token_usage writers/readers + all_tasks/latest_tokens_by_task for the CLI; open_checkpointer() shares this one connection.
 - `orchestrator/orchestrator/memory/checkpointer.py` — async LangGraph checkpointer facade over sync SqliteSaver on StateStore's single connection.
 - `orchestrator/tests/memory/test_store.py` — schema, WAL mode, round-trip and thread-safety tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
 - `orchestrator/orchestrator/memory/knowledge_docs.py` — Tier-1 markdown knowledge docs: read_latest + append-only UTC-timestamped sections.
 - `orchestrator/tests/memory/test_knowledge_docs.py` — knowledge docs tests: missing-file reads, timestamped appends, history preservation.
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
-- `orchestrator/orchestrator/governance/budget.py` — per-level token budget tracking and hard caps.
+- `orchestrator/orchestrator/governance/budget.py` — BudgetTracker: per-level token counters in token_usage, caps from config, BUDGET_EXHAUSTED_PREFIX blocker convention (exhausted budget = blocker, not hang).
 - `orchestrator/orchestrator/governance/retry_policy.py` — enforced retry caps (max_worker_retries + 1 total attempts) and escalation limits.
 - `CONTEXT.md` — domain glossary: roles, Task/Report/Reconciliation/Blocker, gates, retry cap.
 - `docs/adr/0001-levelgraph-owns-wiring-explicit-state-schemas.md` — ADR: LevelGraph owns graph wiring; state schemas stay explicit.
@@ -54,13 +59,15 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/domains/infra/repo_map.md` — infra domain knowledge (Domain Lead-maintained).
 - `orchestrator/tests/test_scaffold.py` — smoke test: all stub modules import.
 - `orchestrator/tests/test_contracts.py` — Task/Report contract tests: domain field, conflict-blocker convention.
-- `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override.
+- `orchestrator/tests/test_config.py` — config loading: real file, defaults, env override, budgets caps (null = uncapped), paths.logs.
 - `orchestrator/tests/test_prompts.py` — worker prompt content tests.
-- `orchestrator/tests/test_main.py` — manage/lead/start/approve CLI end-to-end tests via CliRunner.
+- `orchestrator/tests/test_main.py` — manage/lead/start/approve CLI end-to-end tests via CliRunner, plus status tree and logs tailing commands.
 - `orchestrator/tests/graph/test_architect.py` — architect tests: epic planning gate, finalization, PROJECT_STATE appends, approved-leads resume.
-- `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode.
+- `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode and TOKENS_USED reporting.
 - `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
-- `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests + async worker node and semaphore cap tests.
+- `orchestrator/tests/governance/test_budget.py` — BudgetTracker tests: per-level accumulation, cap math, uncapped levels, blocker message contract.
+- `orchestrator/tests/test_logging_setup.py` — RunLogger tests: timestamped file, JSON line format, ordering, thread-safety, idempotent close.
+- `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests (incl. TOKENS_USED parsing, budget-gated dispatch, JSONL events) + async worker node and semaphore cap tests.
 - `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer and StaticDomainDecomposer child-task tests.
 - `orchestrator/tests/graph/test_lead_graph.py` — lead graph E2E: clean managers, conflict→reconciliation, escalation, empty decomposition.
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).

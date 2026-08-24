@@ -8,6 +8,8 @@ terminates when everything is merged or failed.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.types import Send
@@ -15,12 +17,16 @@ from langgraph.types import Send
 from orchestrator.contracts import Report, Task
 from orchestrator.execution.worktree_manager import WorktreeManager
 from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.governance.budget import BudgetTracker
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.decompose import Decomposer
 from orchestrator.graph.manager import ReviewDecision, finalize_parent, review_reports
 from orchestrator.graph.state import OrchestratorState
 from orchestrator.graph.worker import TEST_TIMEOUT_S, make_worker_node
 from orchestrator.memory.store import StateStore
+
+if TYPE_CHECKING:
+    from orchestrator.logging_setup import RunLogger
 
 
 def build_graph(
@@ -36,13 +42,16 @@ def build_graph(
     worker_semaphore=None,
     knowledge=None,
     domains_dir=None,
+    budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ):
     """Assemble and compile the Manager/Worker StateGraph with injected deps.
 
     ``worker_semaphore`` lets a caller share one concurrency cap across
     graphs (the Domain Lead passes its own so the global worker budget holds).
     ``knowledge`` + ``domains_dir`` wire Tier-1 memory into worker prompts
-    (Phase 5).
+    (Phase 5). ``budget`` gates dispatch when a level's tokens are exhausted;
+    ``runlog`` receives merge/retry/report/task events (Phase 6).
     """
     worker = make_worker_node(
         store=store,
@@ -54,6 +63,8 @@ def build_graph(
         semaphore=worker_semaphore,
         knowledge=knowledge,
         domains_dir=domains_dir,
+        budget=budget,
+        runlog=runlog,
     )
 
     def _result(
@@ -84,6 +95,7 @@ def build_graph(
                 finalize_parent(
                     parent=parent, decision=decision, reports=[], store=store,
                     repo_root=worktrees.repo_root, test_command=test_command,
+                    runlog=runlog,
                 )
                 return {
                     "final_status": parent.status,
@@ -106,6 +118,7 @@ def build_graph(
             worktrees=worktrees,
             retry_policy=retry_policy,
             store=store,
+            runlog=runlog,
         )
         update: dict = {
             "merged": decision.merged,
@@ -116,6 +129,7 @@ def build_graph(
             finalize_parent(
                 parent=parent, decision=decision, reports=reports, store=store,
                 repo_root=worktrees.repo_root, test_command=test_command,
+                runlog=runlog,
             )
             update["final_status"] = parent.status
             update["manager_results"] = [

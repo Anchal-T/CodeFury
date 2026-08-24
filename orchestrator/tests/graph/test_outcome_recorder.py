@@ -76,6 +76,36 @@ def test_passing_integration_gate_keeps_ok_status(
     assert store.get_task("m-1").status == "review"
 
 
+def test_record_emits_report_event(store: StateStore) -> None:
+    """Every level's finalization lands one report event in the JSONL log."""
+
+    class MemoryRunLogger:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        def event(self, kind: str, **fields: object) -> None:
+            self.events.append((kind, dict(fields)))
+
+    runlog = MemoryRunLogger()
+    recorder = OutcomeRecorder(store, agent_role="lead", runlog=runlog)  # type: ignore[arg-type]
+    recorder.record(
+        make_task("lead-1"),
+        RecordRequest(ok=False, blockers=["boom"], summary="bad", tokens_used=42),
+    )
+
+    assert runlog.events == [
+        (
+            "report",
+            {
+                "task_id": "lead-1",
+                "agent": "lead:lead-1",
+                "status": "failed",
+                "tokens_used": 42,
+            },
+        )
+    ]
+
+
 def test_knowledge_section_appended_when_configured(
     store: StateStore, tmp_path: Path
 ) -> None:

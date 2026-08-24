@@ -137,6 +137,54 @@ def test_fake_worker_detects_reconciler_from_prompt_id(
     assert "reconciler" in text
 
 
+def test_fake_worker_emits_tokens_used_line(tmp_path: Path, python_bin: str) -> None:
+    """The orchestrator attributes tokens by parsing this line (Phase 6)."""
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), "tokenful task"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "TOKENS_USED: 1000" in proc.stdout
+
+
+def test_fake_worker_tokens_env_override(tmp_path: Path, python_bin: str) -> None:
+    env = {**os.environ, "FAKE_WORKER_TOKENS": "42"}
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), "cheap task"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "TOKENS_USED: 42" in proc.stdout
+
+
+def test_fake_worker_fail_mode_reports_no_tokens(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """A crashed worker spent nothing — no TOKENS_USED line may appear."""
+    env = {**os.environ, "FAKE_WORKER_FAIL": "1"}
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), "doomed"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "TOKENS_USED" not in proc.stdout
+    assert "TOKENS_USED" not in proc.stderr
+
+
 def test_fake_worker_sleep_mode_delays_before_success(
     tmp_path: Path, python_bin: str
 ) -> None:

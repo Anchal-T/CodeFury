@@ -8,19 +8,36 @@ manager are all injected, so the loop is unit-testable without a real LLM.
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.config import PYTEST_NO_TESTS_EXIT_CODE
 from orchestrator.contracts import Report, Task
 from orchestrator.execution.worktree_manager import WorktreeManager
 from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
+from orchestrator.governance.budget import BudgetTracker
 from orchestrator.memory.store import StateStore
 from orchestrator.prompts import build_worker_prompt
 
+if TYPE_CHECKING:
+    from orchestrator.logging_setup import RunLogger
+
 TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
+
+#: Worker output convention for token attribution (Phase 6): a standalone
+#: 'TOKENS_USED: <n>' line; the last marker wins when retries append output.
+TOKENS_USED_PATTERN = re.compile(r"^TOKENS_USED:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def _parse_tokens_used(*outputs: str) -> int:
+    """Extract reported token usage from worker output; absent/malformed → 0."""
+    matches = TOKENS_USED_PATTERN.findall("\n".join(outputs))
+    return int(matches[-1]) if matches else 0
 
 
 @dataclass
@@ -93,6 +110,8 @@ def run_worker_task(
     test_command: list[str],
     tests_timeout: float = TEST_TIMEOUT_S,
     knowledge_context: str = "",
+    budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
@@ -100,7 +119,10 @@ def run_worker_task(
     Report is ALWAYS saved — even when the pipeline itself crashes — so a
     task is never left in_progress with no trace of what happened.
     ``knowledge_context`` carries the latest Tier-1 memory section (plan §9
-    Phase 5) into the worker prompt.
+    Phase 5) into the worker prompt. ``budget`` (Phase 6) gates the dispatch:
+    an exhausted level budget short-circuits with a blocker Report before any
+    worktree or subprocess exists. ``runlog`` receives task_start/task_end
+    events for the JSONL run log (Phase 6).
     """
     task.status = "in_progress"
     store.save_task(task)
@@ -113,6 +135,8 @@ def run_worker_task(
             test_command=test_command,
             tests_timeout=tests_timeout,
             knowledge_context=knowledge_context,
+            budget=budget,
+            runlog=runlog,
         )
     except Exception as exc:
         report = Report(
@@ -139,28 +163,56 @@ def _run_pipeline(
     test_command: list[str],
     tests_timeout: float,
     knowledge_context: str = "",
+    budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ) -> Report:
-    worktree = worktrees.create(task.id)
-    result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
-    tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
-    worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
+    if runlog is not None:
+        runlog.event("task_start", task_id=task.id, level=task.level)
 
-    blockers = _blockers(result, tests, worktree)
-    report = Report(
-        task_id=task.id,
-        agent=f"worker:{task.id}",
-        summary=_summarize(result, tests),
-        diff_ref=worktrees.branch_name(task.id),
-        tests_passed=tests.passed and not blockers,
-        # Phase 6 parses real token usage from the worker output; until then
-        # usage is attributed via governance counters at the calling level.
-        tokens_used=0,
-        blockers=blockers,
-    )
-    store.save_report(report)
-    task.status = "failed" if blockers else "review"
-    store.save_task(task)
-    return report
+    dispatch = budget.dispatch(task.level) if budget is not None else nullcontext(True)
+    with dispatch as allowed:
+        if not allowed:
+            report = Report(
+                task_id=task.id,
+                agent=f"worker:{task.id}",
+                summary="skipped: level token budget exhausted",
+                diff_ref=None,
+                tests_passed=False,
+                tokens_used=0,
+                blockers=[budget.blocker(task.level)],  # type: ignore[union-attr]
+            )
+            store.save_report(report)
+            task.status = "failed"
+            store.save_task(task)
+            if runlog is not None:
+                runlog.event("task_end", task_id=task.id, status=task.status)
+            return report
+
+        worktree = worktrees.create(task.id)
+        result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
+        tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
+        worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
+
+        tokens_used = _parse_tokens_used(result.stdout, result.stderr)
+        if budget is not None:
+            budget.record(task.level, tokens_used)
+
+        blockers = _blockers(result, tests, worktree)
+        report = Report(
+            task_id=task.id,
+            agent=f"worker:{task.id}",
+            summary=_summarize(result, tests),
+            diff_ref=worktrees.branch_name(task.id),
+            tests_passed=tests.passed and not blockers,
+            tokens_used=tokens_used,
+            blockers=blockers,
+        )
+        store.save_report(report)
+        task.status = "failed" if blockers else "review"
+        store.save_task(task)
+        if runlog is not None:
+            runlog.event("task_end", task_id=task.id, status=task.status)
+        return report
 
 
 def make_worker_node(
@@ -174,6 +226,8 @@ def make_worker_node(
     semaphore: asyncio.Semaphore | None = None,
     knowledge: KnowledgeDocs | None = None,
     domains_dir: Path | None = None,
+    budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
@@ -187,6 +241,10 @@ def make_worker_node(
     ``knowledge`` + ``domains_dir`` wire Tier-1 memory through the level
     (plan §9 Phase 5): the node prepends the latest
     domains/<domain>/repo_map.md section to every worker prompt.
+
+    ``budget`` (Phase 6) gates every dispatch at the pipeline choke point:
+    an exhausted level budget yields an instant blocker Report instead of a
+    spawned worker. ``runlog`` receives task_start/task_end events.
     """
     if max_workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
@@ -211,6 +269,8 @@ def make_worker_node(
                 test_command=test_command,
                 tests_timeout=tests_timeout,
                 knowledge_context=knowledge_context,
+                budget=budget,
+                runlog=runlog,
             )
         return {
             "reports": [report.model_dump()],

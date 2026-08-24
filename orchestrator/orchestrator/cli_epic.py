@@ -15,9 +15,11 @@ from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
 from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.governance.budget import BudgetTracker
 from orchestrator.graph.architect import finalize_epic, plan_epic, run_approved_leads
 from orchestrator.graph.decompose import SingleManagerDecomposer, StaticEpicDecomposer
 from orchestrator.graph.lead_graph import build_lead_graph
+from orchestrator.logging_setup import setup_logging
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
 
@@ -68,6 +70,8 @@ def start(
         )
         knowledge = KnowledgeDocs()
         domains_dir = base / config.paths.domains
+        budget = BudgetTracker(store, config.budgets)
+        runlog = setup_logging(base / config.paths.logs)
 
         def lead_graph_factory(lead: Task, checkpointer):
             return build_lead_graph(
@@ -81,21 +85,27 @@ def start(
                 knowledge=knowledge,
                 domains_dir=domains_dir,
                 checkpointer=checkpointer,
+                budget=budget,
+                runlog=runlog,
             )
 
-        click.echo(f"[start] resuming epic {epic.id} ('{epic.goal}')")
-        outcomes = run_approved_leads(
-            store=store, epic=store.get_task(epic.id), lead_graph_factory=lead_graph_factory
-        )
-        for outcome in outcomes:
-            click.echo(f"[start] lead finished: outcome={outcome.get('outcome', 'unknown')}")
+        try:
+            click.echo(f"[start] resuming epic {epic.id} ('{epic.goal}')")
+            outcomes = run_approved_leads(
+                store=store, epic=store.get_task(epic.id), lead_graph_factory=lead_graph_factory
+            )
+            for outcome in outcomes:
+                click.echo(f"[start] lead finished: outcome={outcome.get('outcome', 'unknown')}")
 
-        report = finalize_epic(
-            epic=store.get_task(epic.id),
-            store=store,
-            knowledge=knowledge,
-            project_state=domains_dir / "PROJECT_STATE.md",
-        )
+            report = finalize_epic(
+                epic=store.get_task(epic.id),
+                store=store,
+                knowledge=knowledge,
+                project_state=domains_dir / "PROJECT_STATE.md",
+                runlog=runlog,
+            )
+        finally:
+            runlog.close()
         if report is None:
             waiting = [t for t in store.tasks_by_parent(epic.id) if t.status == "pending_approval"]
             click.echo(f"[start] epic {epic.id}: {len(waiting)} lead(s) still awaiting approval:")

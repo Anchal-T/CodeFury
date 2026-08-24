@@ -11,11 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.contracts import Report, Task
 from orchestrator.graph.worker import run_tests
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
+
+if TYPE_CHECKING:
+    from orchestrator.logging_setup import RunLogger
 
 #: Canonical blocker appended when the post-merge integration gate fails.
 #: Workers test in isolation, so individually passing branches can still
@@ -63,12 +67,14 @@ class OutcomeRecorder:
         ok_status: str = "review",
         integration: IntegrationGate | None = None,
         knowledge: KnowledgeDocs | None = None,
+        runlog: "RunLogger | None" = None,
     ) -> None:
         self.store = store
         self.agent_role = agent_role
         self.ok_status = ok_status
         self.integration = integration
         self.knowledge = knowledge
+        self.runlog = runlog
 
     def record(self, task: Task, request: RecordRequest) -> Report:
         ok = request.ok
@@ -97,6 +103,14 @@ class OutcomeRecorder:
             blockers=blockers,
         )
         self.store.save_report(report)
+        if self.runlog is not None:
+            self.runlog.event(
+                "report",
+                task_id=task.id,
+                agent=report.agent,
+                status=task.status,
+                tokens_used=request.tokens_used,
+            )
         if self.knowledge is not None and request.knowledge_path is not None:
             self.knowledge.append_section(
                 request.knowledge_path,

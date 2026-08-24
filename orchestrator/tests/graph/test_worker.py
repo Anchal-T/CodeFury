@@ -12,10 +12,16 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.config import BudgetsConfig
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager
 from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
-from orchestrator.graph.worker import make_worker_node, run_worker_task
+from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX, BudgetTracker
+from orchestrator.graph.worker import (
+    _parse_tokens_used,
+    make_worker_node,
+    run_worker_task,
+)
 from orchestrator.memory.store import StateStore
 
 FAKE_WORKER = Path(__file__).resolve().parents[2] / "scripts" / "fake_worker.py"
@@ -419,5 +425,197 @@ def test_worker_node_without_knowledge_wiring_omits_context(
 
         assert update["reports"][0]["tests_passed"] is True
         assert "Project knowledge" not in runner.prompts[0]
+    finally:
+        store.close()
+
+
+# -- Phase 6: token attribution + budget gate -------------------------------
+
+
+class MemoryRunLogger:
+    """Test double capturing events in order."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def event(self, kind: str, **fields: object) -> None:
+        self.events.append((kind, dict(fields)))
+
+
+def test_pipeline_emits_task_start_and_end_events(pipeline) -> None:
+    store, worktrees, runner, passing_tests, _ = pipeline
+    runlog = MemoryRunLogger()
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+        runlog=runlog,
+    )
+    assert [kind for kind, _ in runlog.events] == ["task_start", "task_end"]
+    assert runlog.events[0][1] == {"task_id": "t-42", "level": 0}
+    assert runlog.events[1][1] == {"task_id": "t-42", "status": "review"}
+    del report
+
+
+def test_budget_gate_emits_start_and_failed_end(pipeline) -> None:
+    """Even a skipped dispatch leaves start/end traces in the JSONL log."""
+    store, worktrees, _, passing_tests, _ = pipeline
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=1))
+    budget.record(0, 1)
+    runlog = MemoryRunLogger()
+    run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=NeverRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        budget=budget,
+        runlog=runlog,
+    )
+    assert [kind for kind, _ in runlog.events] == ["task_start", "task_end"]
+    assert runlog.events[1][1] == {"task_id": "t-42", "status": "failed"}
+
+
+def test_parse_tokens_used_takes_last_marker() -> None:
+    assert _parse_tokens_used("TOKENS_USED: 100\nall done", "") == 100
+    assert _parse_tokens_used("TOKENS_USED: 5\nretry", "warning\nTOKENS_USED: 9") == 9
+
+
+def test_parse_tokens_used_missing_or_malformed_is_zero() -> None:
+    """A worker that never reported (crash, old agent CLI) costs nothing;
+    mid-line mentions are not markers — the line must stand alone."""
+    assert _parse_tokens_used("", "") == 0
+    assert _parse_tokens_used("plain output only", "no marker") == 0
+    assert _parse_tokens_used("TOKENS_USED: lots", "TOKENS_USED:") == 0
+    assert _parse_tokens_used("log says TOKENS_USED: 12 inline", "") == 0
+
+
+class NeverRunner:
+    """Fails the test the moment the pipeline tries to spawn a worker."""
+
+    def run(self, prompt: str, cwd: Path) -> RunnerResult:
+        raise AssertionError("runner must not be invoked once budget is exhausted")
+
+
+def test_exhausted_budget_short_circuits_before_running_worker(pipeline) -> None:
+    """Exhausted budget = immediate blocker report, never a hang and no
+    worktree/subprocess spend (mirrors the concurrency lesson)."""
+    store, worktrees, _, passing_tests, _ = pipeline
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=10))
+    budget.record(0, 10)
+
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=NeverRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        budget=budget,
+    )
+
+    assert not report.tests_passed
+    assert report.blockers[0].startswith(BUDGET_EXHAUSTED_PREFIX)
+    assert report.tokens_used == 0
+    assert store.get_task("t-42").status == "failed"
+    assert store.latest_report("t-42") == report
+    assert not worktrees.worktree_path("t-42").exists()
+
+
+def test_healthy_budget_lets_dispatch_proceed(pipeline) -> None:
+    store, worktrees, runner, passing_tests, _ = pipeline
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=10))
+    budget.record(0, 9)
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+        budget=budget,
+    )
+    assert report.tests_passed
+
+
+def test_tokens_parsed_from_output_and_recorded(pipeline) -> None:
+    """Report.tokens_used becomes real; the tracker books it at level 0."""
+    store, worktrees, _, passing_tests, _ = pipeline
+
+    class TokenRunner:
+        def run(self, prompt: str, cwd: Path) -> RunnerResult:
+            return RunnerResult(
+                returncode=0,
+                stdout="worked\nTOKENS_USED: 250",
+                stderr="",
+                timed_out=False,
+                duration_s=0.1,
+            )
+
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=1000))
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=TokenRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        budget=budget,
+    )
+
+    assert report.tokens_used == 250
+    assert store.total_tokens_by_level(0) == 250
+    assert budget.remaining(0) == 750
+
+
+def test_report_carries_real_tokens_even_without_tracker(pipeline) -> None:
+    """Attribution works standalone: parsing does not require a cap."""
+    store, worktrees, _, passing_tests, _ = pipeline
+
+    class TokenRunner:
+        def run(self, prompt: str, cwd: Path) -> RunnerResult:
+            return RunnerResult(
+                returncode=0,
+                stdout="TOKENS_USED: 77",
+                stderr="",
+                timed_out=False,
+                duration_s=0.1,
+            )
+
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=TokenRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+    )
+    assert report.tokens_used == 77
+    assert store.total_tokens_by_level(0) == 0, "no tracker, no booking"
+
+
+def test_worker_node_threads_budget_gate_to_pipeline(
+    git_repo: Path, tmp_path: Path, python_bin: str
+) -> None:
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        budget = BudgetTracker(store, BudgetsConfig(worker_tokens=1))
+        budget.record(0, 1)
+        node = make_worker_node(
+            store=store,
+            worktrees=worktrees,
+            runner=NeverRunner(),  # type: ignore[arg-type]
+            test_command=[python_bin, "-c", "print('tests ok')"],
+            max_workers=2,
+            budget=budget,
+        )
+        task = make_task()
+        store.save_task(task)
+
+        update = asyncio.run(node({"task": task.model_dump()}))
+
+        blockers = update["reports"][0]["blockers"]
+        assert any(b.startswith(BUDGET_EXHAUSTED_PREFIX) for b in blockers)
+        assert store.get_task("t-42").status == "failed"
     finally:
         store.close()

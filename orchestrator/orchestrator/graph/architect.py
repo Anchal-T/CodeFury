@@ -63,6 +63,7 @@ def finalize_epic(
     store: StateStore,
     knowledge: KnowledgeDocs,
     project_state: Path,
+    runlog=None,
 ) -> Report | None:
     """Finalize the epic once every lead is resolved; None if not ready.
 
@@ -95,6 +96,14 @@ def finalize_epic(
         blockers=blockers,
     )
     store.save_report(report)
+    if runlog is not None:
+        runlog.event(
+            "report",
+            task_id=epic.id,
+            agent=report.agent,
+            status=epic.status,
+            tokens_used=tokens,
+        )
 
     body_lines = [f"epic: {epic.goal}"]
     for lead in leads:
