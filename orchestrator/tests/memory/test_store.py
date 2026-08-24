@@ -1,8 +1,12 @@
 """Tests for orchestrator.memory.store (SQLite WAL persistence)."""
 
+import sqlite3
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
+from langgraph.constants import END, START
+from langgraph.graph import StateGraph
 
 from orchestrator.contracts import Report, Task
 from orchestrator.memory.store import StateStore
@@ -42,7 +46,78 @@ def store(tmp_path: Path) -> StateStore:
 
 
 def test_init_schema_creates_all_tables(store: StateStore) -> None:
-    assert set(store.table_names()) == {"tasks", "reports", "agents", "checkpoints", "token_usage"}
+    # The legacy stub `checkpoints` table is gone in Phase 5; SqliteSaver owns
+    # its own checkpoints/writes tables, created lazily on first use.
+    assert set(store.table_names()) == {"tasks", "reports", "agents", "token_usage"}
+
+
+def test_init_schema_drops_legacy_stub_checkpoints_table(tmp_path: Path) -> None:
+    """Pre-Phase-5 databases carry a stub checkpoints table whose schema
+    collides with SqliteSaver's; init_schema must clear exactly that shape."""
+    db = tmp_path / "legacy.db"
+    raw = sqlite3.connect(str(db))
+    try:
+        raw.execute(
+            "CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    store = StateStore(db)
+    store.init_schema()
+    try:
+        assert "checkpoints" not in set(store.table_names())
+    finally:
+        store.close()
+
+
+def test_init_schema_keeps_saver_checkpoints_table(store: StateStore) -> None:
+    """Once the checkpointer has created its own tables, re-running
+    init_schema must never drop them."""
+    store.checkpointer().get_tuple({"configurable": {"thread_id": "t"}})
+    store.init_schema()
+    assert "checkpoints" in set(store.table_names())
+    assert "writes" in set(store.table_names())
+
+
+class _TrivialState(TypedDict, total=False):
+    n: int
+
+
+def _trivial_graph(checkpointer):
+    builder = StateGraph(_TrivialState)
+    builder.add_node("add", lambda state: {"n": state.get("n", 0) + 1})
+    builder.add_edge(START, "add")
+    builder.add_edge("add", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+def test_checkpointer_returns_cached_sqlite_saver(store: StateStore) -> None:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    saver = store.checkpointer()
+    assert isinstance(saver, SqliteSaver)
+    assert store.checkpointer() is saver
+
+
+def test_checkpointer_round_trip_survives_reopen(tmp_path: Path) -> None:
+    """The whole point of Phase 5: a checkpoint written by one process is
+    readable by a fresh StateStore on the same db file."""
+    db = tmp_path / "data" / "cp.db"
+    config = {"configurable": {"thread_id": "lead:t1"}}
+    with StateStore(db) as store:
+        store.init_schema()
+        graph = _trivial_graph(store.checkpointer())
+        graph.invoke({"n": 1}, config)
+        assert "checkpoints" in set(store.table_names())
+
+    with StateStore(db) as reopened:
+        reopened.init_schema()
+        graph = _trivial_graph(reopened.checkpointer())
+        snapshot = graph.get_state(config)
+        # The first process's completed run left n=2 (1 in, +1 in the node).
+        assert snapshot.values.get("n") == 2
 
 
 def test_wal_mode_enabled(store: StateStore) -> None:

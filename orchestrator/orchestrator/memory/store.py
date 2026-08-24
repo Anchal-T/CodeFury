@@ -1,8 +1,11 @@
 """SQLite state store (plan §3.2): one file, WAL mode, no server.
 
-Tables: tasks, reports, agents, checkpoints, token_usage. Each row keeps the
-queryable columns as real columns and the full pydantic model as a JSON
-payload, so contracts can evolve without schema churn.
+Tables: tasks, reports, agents, token_usage. Each row keeps the queryable
+columns as real columns and the full pydantic model as a JSON payload, so
+contracts can evolve without schema churn. Graph checkpoints live in the
+same file under SqliteSaver's own tables (checkpoints/writes), created
+lazily by ``StateStore.checkpointer()`` — SQLite stays the single source of
+truth for both task state and resumable graph state (plan §9 Phase 5).
 
 Thread-safe: worker pipelines run concurrently in ``asyncio.to_thread``
 threads, so every public method serializes on a lock and the connection is
@@ -15,7 +18,13 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from langgraph.checkpoint.sqlite import SqliteSaver
+
 from orchestrator.contracts import Report, Task
+
+#: Brief write contention between task saves and checkpoint writes is normal
+#: under WAL; wait instead of failing fast with SQLITE_BUSY.
+_BUSY_TIMEOUT_MS = 5000
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -41,10 +50,6 @@ CREATE TABLE IF NOT EXISTS agents (
     role    TEXT NOT NULL,
     payload TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS checkpoints (
-    thread_id TEXT PRIMARY KEY,
-    payload   TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS token_usage (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     level      INTEGER NOT NULL,
@@ -59,6 +64,8 @@ class StateStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._saver: SqliteSaver | None = None
+        self._saver_conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
 
     def connection(self) -> sqlite3.Connection:
@@ -66,22 +73,40 @@ class StateStore:
         if self._conn is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
     def init_schema(self) -> None:
-        """Create all tables and switch the database to WAL mode."""
+        """Create all tables, switch to WAL mode, and migrate old databases.
+
+        Pre-Phase-5 databases carry a stub ``checkpoints`` table (thread_id +
+        payload) that collides with SqliteSaver's own schema; it is dropped —
+        but only in that exact legacy shape, never once the saver owns the
+        table.
+        """
         with self._lock:
             conn = self.connection()
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
-            conn.commit()
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'"
+            ).fetchone()
+            if row:
+                columns = {col[1] for col in conn.execute("PRAGMA table_info(checkpoints)")}
+                if "checkpoint_ns" not in columns:
+                    conn.execute("DROP TABLE checkpoints")
+                    conn.commit()
 
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
+            if self._saver_conn is not None:
+                self._saver_conn.close()
+                self._saver_conn = None
+                self._saver = None
 
     def __enter__(self) -> "StateStore":
         with self._lock:
@@ -181,6 +206,18 @@ class StateStore:
             ).fetchall()
         return tuple(row["name"] for row in rows)
 
-    def checkpointer(self):
-        """Return a LangGraph SqliteSaver bound to the same db file."""
-        raise NotImplementedError("Phase 5")
+    def checkpointer(self) -> SqliteSaver:
+        """Return a LangGraph SqliteSaver bound to the same db file (cached).
+
+        The saver gets its own connection — StateStore and the checkpointer
+        each hold one lock, and sharing a single handle between them would
+        interleave their transactions. WAL is a per-file property so the
+        second connection inherits it; busy_timeout rides out brief write
+        contention with task saves.
+        """
+        if self._saver is None:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._saver_conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._saver_conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            self._saver = SqliteSaver(self._saver_conn)
+        return self._saver
