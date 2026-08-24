@@ -10,6 +10,9 @@ the repo root — the runner executes with cwd set to the worktree):
 
 Modes (environment variables):
     FAKE_WORKER_FAIL=1              simulate a failing worker (retry demos)
+    FAKE_WORKER_SLEEP_S=<seconds>   sleep before doing the work — lets demos
+                                    and kill/resume tests catch a run
+                                    mid-flight
     FAKE_WORKER_TARGET=<relpath>    write that file instead of hash modules;
                                     content embeds the prompt hash so two
                                     workers on one file genuinely conflict
@@ -23,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -31,6 +35,11 @@ def main() -> int:
     if os.environ.get("FAKE_WORKER_FAIL") == "1":
         print("fake worker: simulated failure (FAKE_WORKER_FAIL=1)", file=sys.stderr)
         return 1
+
+    sleep_s = float(os.environ.get("FAKE_WORKER_SLEEP_S", "0"))
+    if sleep_s > 0:
+        print(f"fake worker: sleeping {sleep_s}s before working", flush=True)
+        time.sleep(sleep_s)
 
     # Reconciliation dispatches are recognized from the orchestrator's
     # '<task>-reconcile-<n>' id convention embedded in the prompt; an explicit
