@@ -24,6 +24,12 @@ from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.build_graph import TEST_TIMEOUT_S, build_graph
 from orchestrator.graph.decompose import DomainDecomposer, SingleWorkerDecomposer
 from orchestrator.graph.domain_lead import lead_review
+from orchestrator.graph.outcome_recorder import (
+    INTEGRATION_FAILED_BLOCKER,
+    IntegrationGate,
+    OutcomeRecorder,
+    RecordRequest,
+)
 from orchestrator.graph.state import LeadState
 from orchestrator.graph.worker import make_worker_node, run_tests
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
@@ -87,6 +93,15 @@ def build_lead_graph(
         semaphore=semaphore,
     )
 
+    recorder = OutcomeRecorder(
+        store,
+        agent_role="lead",
+        integration=IntegrationGate(
+            repo_root=worktrees.repo_root, test_command=test_command
+        ),
+        knowledge=knowledge,
+    )
+
     def _finalize(
         lead: Task,
         *,
@@ -98,40 +113,36 @@ def build_lead_graph(
         escalated_manager_ids: list[str],
         merged_recons: list[str],
     ) -> None:
-        lead.status = "review" if ok else "failed"
-        store.save_task(lead)
-        tokens = sum(report.tokens_used for report in reports)
         summary = (
             f"{clean_managers}/{total_managers} manager(s) clean, "
             f"{len(merged_recons)} reconciliation(s) merged, "
             f"{len(escalated_manager_ids)} escalation(s)"
         )
-        store.save_report(
-            Report(
-                task_id=lead.id,
-                agent=f"lead:{lead.id}",
-                summary=summary,
-                diff_ref=None,
-                tests_passed=ok,
-                tokens_used=tokens,
-                blockers=blockers,
-            )
+        body = "\n".join(
+            [
+                f"domain: {lead.domain}",
+                f"managers clean: {clean_managers}/{total_managers}",
+                f"reconciliations merged: {', '.join(merged_recons) or 'none'}",
+                f"escalations: {', '.join(escalated_manager_ids) or 'none'}",
+                f"blockers: {'; '.join(blockers) or 'none'}",
+            ]
         )
-        if domains_dir is not None and lead.domain:
-            body = "\n".join(
-                [
-                    f"domain: {lead.domain}",
-                    f"managers clean: {clean_managers}/{total_managers}",
-                    f"reconciliations merged: {', '.join(merged_recons) or 'none'}",
-                    f"escalations: {', '.join(escalated_manager_ids) or 'none'}",
-                    f"blockers: {'; '.join(blockers) or 'none'}",
-                ]
-            )
-            knowledge.append_section(
-                domains_dir / lead.domain / "repo_map.md",
-                title=f"lead run {lead.id}",
-                body=body,
-            )
+        recorder.record(
+            lead,
+            RecordRequest(
+                ok=ok,
+                blockers=blockers,
+                summary=summary,
+                tokens_used=sum(report.tokens_used for report in reports),
+                knowledge_path=(
+                    domains_dir / lead.domain / "repo_map.md"
+                    if domains_dir is not None and lead.domain
+                    else None
+                ),
+                knowledge_title=f"lead run {lead.id}",
+                knowledge_body=body,
+            ),
+        )
 
     async def lead(state: LeadState) -> dict:
         lead_task = Task.model_validate(state["lead_task"])
@@ -211,8 +222,8 @@ def build_lead_graph(
             integration = run_tests(test_command, cwd=worktrees.repo_root)
             if not integration.passed:
                 ok = False
-                decision.blockers.append("integration tests failed after merge")
-                ever_blockers.append("integration tests failed after merge")
+                decision.blockers.append(INTEGRATION_FAILED_BLOCKER)
+                ever_blockers.append(INTEGRATION_FAILED_BLOCKER)
         escalated_manager_ids = sorted(
             (set(state.get("escalated") or []) | set(decision.escalated)) & set(total_ids)
         )

@@ -11,7 +11,11 @@ from pathlib import Path
 from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
 from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
 from orchestrator.governance.retry_policy import RetryPolicy
-from orchestrator.graph.worker import run_tests
+from orchestrator.graph.outcome_recorder import (
+    IntegrationGate,
+    OutcomeRecorder,
+    RecordRequest,
+)
 from orchestrator.memory.store import StateStore
 
 
@@ -90,32 +94,27 @@ def finalize_parent(
     """Persist the parent task's final status and its aggregate Report.
 
     When repo_root and test_command are provided and the merged outcome is
-    otherwise OK, the test command runs once against the assembled repo
-    root: workers test in isolation, so individually passing branches can
-    still combine into a broken integrated tree (plan §9 review gate).
+    otherwise OK, the integration gate runs once against the assembled repo
+    root (see OutcomeRecorder).
     """
-    blockers = list(decision.blockers)
-    summary = (
-        f"{len(decision.merged)} merged, {len(decision.failed)} failed, "
-        f"{len(decision.retry)} retrying"
+    recorder = OutcomeRecorder(
+        store,
+        agent_role="manager",
+        integration=(
+            IntegrationGate(repo_root=repo_root, test_command=test_command)
+            if repo_root is not None and test_command is not None
+            else None
+        ),
     )
-    ok = decision.all_done and not decision.failed and not blockers
-    if ok and repo_root is not None and test_command is not None:
-        integration = run_tests(test_command, cwd=repo_root)
-        if not integration.passed:
-            blockers.append("integration tests failed after merge")
-            summary = f"{summary}; integration test output tail:\n{integration.output[-500:]}"
-            ok = False
-    parent.status = "review" if ok else "failed"
-    store.save_task(parent)
-    report = Report(
-        task_id=parent.id,
-        agent=f"manager:{parent.id}",
-        summary=summary,
-        diff_ref=None,
-        tests_passed=ok,
-        tokens_used=sum(r.tokens_used for r in reports),
-        blockers=blockers,
+    return recorder.record(
+        parent,
+        RecordRequest(
+            ok=decision.all_done and not decision.failed and not decision.blockers,
+            blockers=list(decision.blockers),
+            summary=(
+                f"{len(decision.merged)} merged, {len(decision.failed)} failed, "
+                f"{len(decision.retry)} retrying"
+            ),
+            tokens_used=sum(r.tokens_used for r in reports),
+        ),
     )
-    store.save_report(report)
-    return report

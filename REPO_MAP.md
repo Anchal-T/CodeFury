@@ -15,7 +15,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure mode, target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/start/status/approve/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph, start/approve the Phase 4 epic flow.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; registers the Phase 4 epic commands.
+- `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
@@ -45,6 +46,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
 - `orchestrator/orchestrator/governance/budget.py` — per-level token budget tracking and hard caps.
 - `orchestrator/orchestrator/governance/retry_policy.py` — enforced retry caps (max_worker_retries + 1 total attempts) and escalation limits.
+- `CONTEXT.md` — domain glossary: roles, Task/Report/Reconciliation/Blocker, gates, retry cap.
+- `docs/adr/0001-levelgraph-owns-wiring-explicit-state-schemas.md` — ADR: LevelGraph owns graph wiring; state schemas stay explicit.
 - `orchestrator/domains/PROJECT_STATE.md` — epic-level project state (Architect-maintained).
 - `orchestrator/domains/backend/repo_map.md` — backend domain knowledge (Domain Lead-maintained).
 - `orchestrator/domains/infra/repo_map.md` — infra domain knowledge (Domain Lead-maintained).
@@ -62,3 +65,6 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
 - `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
 - `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition, manager_results contract.
+- `orchestrator/orchestrator/graph/level_graph.py` — deep lifecycle module: plan/dispatch/review/finalize skeleton, RoundDecision + DispatchSpec routing, attempt counting; state schemas stay caller-owned (ADR 0001).
+- `orchestrator/orchestrator/graph/outcome_recorder.py` — shared finalization: terminal status, aggregate Report, integration gate, knowledge-doc append (INTEGRATION_FAILED_BLOCKER).
+- `orchestrator/tests/graph/test_outcome_recorder.py` — recorder tests: ok/failed status mapping, integration gate blocker, knowledge append.
