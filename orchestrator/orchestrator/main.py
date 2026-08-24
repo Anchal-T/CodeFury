@@ -20,8 +20,14 @@ from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
 from orchestrator.execution.zcode_runner import ZCodeRunner
 from orchestrator.governance.retry_policy import RetryPolicy
+from orchestrator.graph.architect import finalize_epic, plan_epic, run_approved_leads
 from orchestrator.graph.build_graph import build_graph
-from orchestrator.graph.decompose import StaticDecomposer, StaticDomainDecomposer
+from orchestrator.graph.decompose import (
+    SingleManagerDecomposer,
+    StaticDecomposer,
+    StaticDomainDecomposer,
+    StaticEpicDecomposer,
+)
 from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.graph.worker import run_worker_task
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
