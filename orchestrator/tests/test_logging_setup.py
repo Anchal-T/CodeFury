@@ -23,6 +23,16 @@ def test_setup_logging_creates_timestamped_run_file(tmp_path: Path) -> None:
         logger.close()
 
 
+def test_setup_logging_gives_each_run_a_unique_file(tmp_path: Path) -> None:
+    first = setup_logging(tmp_path / "logs")
+    second = setup_logging(tmp_path / "logs")
+    try:
+        assert first.path != second.path
+    finally:
+        first.close()
+        second.close()
+
+
 def test_event_appends_json_line_with_ts_and_fields(tmp_path: Path) -> None:
     logger = RunLogger(tmp_path / "run.jsonl")
     try:
