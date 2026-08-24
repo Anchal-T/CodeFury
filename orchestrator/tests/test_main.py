@@ -317,3 +317,109 @@ def test_lead_command_runs_lead_graph_end_to_end(
     repo_map = root / "domains" / "backend" / "repo_map.md"
     assert repo_map.is_file(), "lead must maintain the domain repo map"
     assert "## lead run" in repo_map.read_text(encoding="utf-8")
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Hard-kill a process and all descendants (the manual kill -9 demo).
+
+    Only the DESCENDANTS are reaped here — the caller owns the direct child
+    (Popen.wait) and must reap it itself, otherwise psutil's waitpid wins
+    the race and subprocess reports a bogus exit status of 0.
+    """
+    import psutil
+
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return
+    for child in children:
+        try:
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    psutil.wait_procs(children, timeout=10)
+    try:
+        parent.kill()
+    except psutil.NoSuchProcess:
+        pass
+
+
+def test_start_resume_after_kill9_continues_from_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    """The Phase 5 acceptance: kill -9 the orchestrator mid-worker, re-invoke,
+    and the epic finishes purely from persisted state — attempts preserved,
+    exactly one report per task, one repo_map section (no duplicated work)."""
+    import os
+    import time
+
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    planned = CliRunner().invoke(
+        cli,
+        ["start", "--epic", "ship it", "--domain-goal", "build the slice:backend",
+         "--task-id", "epic-k"],
+        catch_exceptions=False,
+    )
+    assert planned.exit_code == 0, planned.output
+    with StateStore(root / "data" / "db.sqlite") as store:
+        lead_id = store.tasks_by_parent("epic-k")[0].id
+    assert CliRunner().invoke(cli, ["approve", lead_id], catch_exceptions=False).exit_code == 0
+
+    env = {**os.environ, "FAKE_WORKER_SLEEP_S": "4", "PYTHONPATH": str(FAKE_WORKER.parents[1])}
+    args = [python_bin, "-m", "orchestrator", "start",
+            "--config", str(root / "config.yaml")]
+
+    killed = subprocess.Popen(args, cwd=str(root), env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def worker_in_flight() -> bool:
+        with StateStore(root / "data" / "db.sqlite") as store:
+            rows = store.connection().execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = 'in_progress' AND level = 0"
+            ).fetchone()[0]
+        return rows > 0
+
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and not worker_in_flight():
+        time.sleep(0.1)
+    assert worker_in_flight(), "worker never started; cannot kill mid-flight"
+    time.sleep(0.5)  # land inside the sleeping subprocess
+    assert killed.poll() is None, (
+        f"orchestrator finished before the kill; stdout:\n{killed.stdout.read()}"
+    )
+
+    _kill_process_tree(killed.pid)
+    killed.wait(timeout=15)
+    assert killed.returncode != 0, (
+        f"hard kill must be visible in the exit status; "
+        f"stdout={killed.stdout.read()!r} stderr={killed.stderr.read()!r}"
+    )
+
+    with StateStore(root / "data" / "db.sqlite") as store:
+        lead_status = store.get_task(lead_id).status
+        assert lead_status in ("in_progress",), "killed mid-run, not after finalize"
+        assert store.connection().execute(
+            "SELECT COUNT(*) FROM reports WHERE task_id LIKE ? AND agent LIKE 'worker:%'",
+            (f"{lead_id}%",),
+        ).fetchone()[0] <= 1
+
+    resumed = subprocess.run(args, cwd=str(root), env=env,
+                             capture_output=True, text=True, shell=False, timeout=180)
+    assert resumed.returncode == 0, f"{resumed.stdout}\n{resumed.stderr}"
+    assert "final=done" in resumed.stdout
+
+    with StateStore(root / "data" / "db.sqlite") as store:
+        assert store.get_task("epic-k").status == "done"
+        duplicates = store.connection().execute(
+            "SELECT task_id, COUNT(*) AS c FROM reports GROUP BY task_id HAVING c > 1"
+        ).fetchall()
+        assert duplicates == [], "resume must not duplicate reports/dispatches"
+
+    repo_map = root / "domains" / "backend" / "repo_map.md"
+    assert repo_map.is_file(), "resumed lead still maintains its knowledge doc"
+    assert repo_map.read_text(encoding="utf-8").count("## lead run") == 1
