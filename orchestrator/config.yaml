@@ -3,6 +3,7 @@ concurrency:
   max_managers: 2
 
 budgets:
+  # Per-level token caps enforced at dispatch; null disables a level's cap.
   worker_tokens: 50000
   manager_tokens: 150000
   domain_lead_tokens: 300000
@@ -31,3 +32,4 @@ paths:
   workspaces: ./workspaces
   domains: ./domains
   db: ./data/orchestrator.db
+  logs: ./logs
