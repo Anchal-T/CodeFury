@@ -316,3 +316,108 @@ def test_worker_node_semaphore_caps_concurrency(
         assert wide.max_active >= 2, "cap of 3 must allow actual parallelism"
     finally:
         store.close()
+
+
+class RecordingRunner:
+    """Captures the prompt while behaving like a successful worker."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def run(self, prompt: str, cwd: Path) -> RunnerResult:
+        self.prompts.append(prompt)
+        return RunnerResult(returncode=0, stdout="ok", stderr="", timed_out=False, duration_s=0.0)
+
+
+def make_domain_task(domain: str | None) -> Task:
+    task = make_task()
+    return task.model_copy(update={"id": f"t-{domain or 'x'}", "domain": domain})
+
+
+def test_pipeline_prepends_knowledge_context_to_prompt(pipeline) -> None:
+    """Tier-1 memory reaches the subprocess prompt ahead of the Task JSON."""
+    store, worktrees, _, passing_tests, _ = pipeline
+    runner = RecordingRunner()
+
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,  # type: ignore[arg-type] — same run() interface
+        test_command=passing_tests,
+        knowledge_context="decision: auth module merged last round",
+    )
+
+    assert report.tests_passed
+    prompt = runner.prompts[0]
+    assert "Project knowledge" in prompt
+    assert "auth module merged last round" in prompt
+    assert prompt.index("auth module merged") < prompt.index("Task (JSON)")
+
+
+def test_worker_node_reads_latest_domain_repo_map(
+    git_repo: Path, tmp_path: Path, python_bin: str
+) -> None:
+    """The node resolves the task's domain repo_map.md and hands its latest
+    section to the pipeline as knowledge context."""
+    from orchestrator.memory.knowledge_docs import KnowledgeDocs
+
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        domains_dir = tmp_path / "domains"
+        knowledge = KnowledgeDocs()
+        knowledge.append_section(
+            domains_dir / "backend" / "repo_map.md",
+            title="lead run lead-1",
+            body="repo map marker XYZ",
+        )
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        runner = RecordingRunner()
+        node = make_worker_node(
+            store=store,
+            worktrees=worktrees,
+            runner=runner,  # type: ignore[arg-type]
+            test_command=[python_bin, "-c", "print('tests ok')"],
+            max_workers=2,
+            knowledge=knowledge,
+            domains_dir=domains_dir,
+        )
+        task = make_domain_task("backend")
+        store.save_task(task)
+
+        update = asyncio.run(node({"task": task.model_dump()}))
+
+        assert update["reports"][0]["tests_passed"] is True
+        prompt = runner.prompts[0]
+        assert "repo map marker XYZ" in prompt
+
+    finally:
+        store.close()
+
+
+def test_worker_node_without_knowledge_wiring_omits_context(
+    git_repo: Path, tmp_path: Path, python_bin: str
+) -> None:
+    """No knowledge deps (or no domain) → clean prompt, never a crash."""
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        runner = RecordingRunner()
+        node = make_worker_node(
+            store=store,
+            worktrees=worktrees,
+            runner=runner,  # type: ignore[arg-type]
+            test_command=[python_bin, "-c", "print('tests ok')"],
+            max_workers=2,
+        )
+        task = make_domain_task(None)
+        store.save_task(task)
+
+        update = asyncio.run(node({"task": task.model_dump()}))
+
+        assert update["reports"][0]["tests_passed"] is True
+        assert "Project knowledge" not in runner.prompts[0]
+    finally:
+        store.close()
