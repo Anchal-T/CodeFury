@@ -8,6 +8,7 @@ lives in ``orchestrator.cli_epic``.
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,13 @@ import click
 
 from orchestrator.cli_epic import approve as approve_command
 from orchestrator.cli_epic import start as start_command
+from orchestrator.cli_status import (
+    follow_file,
+    newest_run_file,
+    print_last_lines,
+    render_task_tree,
+    wait_for_newest_run_file,
+)
 from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
@@ -48,6 +56,10 @@ cli.add_command(approve_command)
 def _budget(store: StateStore, config) -> BudgetTracker:
     """Per-level token caps for this invocation (Phase 6)."""
     return BudgetTracker(store, config.budgets)
+
+
+#: Poll cadence for `logs --tail`'s follow loop.
+_FOLLOW_INTERVAL_S = 0.5
 
 
 @cli.command()
@@ -255,16 +267,81 @@ def lead(
 
 
 @cli.command()
-def status() -> None:
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def status(config_path: Path) -> None:
     """Pretty-print the current task tree from SQLite."""
-    raise NotImplementedError("Phase 6")
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    db = base / config.paths.db
+    if not db.exists():
+        click.echo(f"[status] no database at {db} — nothing has run yet")
+        return
+    with StateStore(db) as store:
+        tasks = store.all_tasks()
+        if not tasks:
+            click.echo("[status] no tasks recorded yet")
+            return
+        tree = render_task_tree(tasks, store.latest_tokens_by_task())
+    click.echo(tree)
+
+
+DEFAULT_TAIL_LINES = 20
 
 
 @cli.command()
-@click.option("--tail", is_flag=True, help="Follow the JSONL run log.")
-def logs(tail: bool) -> None:
-    """Show structured JSONL run logs."""
-    raise NotImplementedError("Phase 6")
+@click.option(
+    "--tail",
+    "tail",
+    default=None,
+    is_flag=False,
+    flag_value=str(DEFAULT_TAIL_LINES),
+    help="Show only the last N lines (default 20), then follow the log live.",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def logs(tail: str | None, config_path: Path) -> None:
+    """Print the JSONL run log; with --tail N, follow it live."""
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    logs_dir = base / config.paths.logs
+    latest = newest_run_file(logs_dir)
+    out = sys.stdout
+
+    try:
+        if latest is None:
+            if tail is None:
+                click.echo(f"[logs] no run logs in {logs_dir}")
+                return
+            click.echo(f"[logs] waiting for the first run log in {logs_dir} — Ctrl+C to stop", err=True)
+            latest = wait_for_newest_run_file(logs_dir, interval_s=_FOLLOW_INTERVAL_S)
+
+        if tail is None:
+            out.write(latest.read_text(encoding="utf-8", errors="replace"))
+            out.flush()
+            return
+
+        try:
+            n = int(tail)
+            if n < 0:
+                raise ValueError
+        except ValueError:
+            raise click.ClickException("--tail expects a non-negative integer") from None
+        pos = print_last_lines(latest, n, out)
+        click.echo(f"[logs] following {latest.name} — Ctrl+C to stop", err=True)
+        follow_file(latest, pos, out, interval_s=_FOLLOW_INTERVAL_S)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

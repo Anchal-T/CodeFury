@@ -1,4 +1,5 @@
-"""Tests for the manage/lead/start/approve CLI commands."""
+"""Tests for the manage/lead/start/approve CLI commands, plus the Phase 6
+status/logs introspection commands."""
 
 import subprocess
 from pathlib import Path
@@ -423,3 +424,127 @@ def test_start_resume_after_kill9_continues_from_sqlite(
     repo_map = root / "domains" / "backend" / "repo_map.md"
     assert repo_map.is_file(), "resumed lead still maintains its knowledge doc"
     assert repo_map.read_text(encoding="utf-8").count("## lead run") == 1
+
+
+# -- Phase 6: status / logs ---------------------------------------------------
+
+
+def test_status_prints_task_tree_from_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    leads = _plan_epic_in_db(root, epic_id="epic-tree")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["status"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "epic-tree" in result.output
+    assert "pending_approval" in result.output
+    for lead in leads:
+        assert lead.id in result.output
+
+
+def test_status_without_database_reports_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["status"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "no database" in result.output
+
+
+def test_logs_without_run_log_reports_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["logs"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "no run logs" in result.output
+
+
+def test_logs_prints_newest_run_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+    logs_dir = root / "logs"
+    logs_dir.mkdir()
+    # Names must sort like real UTC-stamped run files do.
+    (logs_dir / "run_20260101T000000Z.jsonl").write_text('{"event": "older"}\n', encoding="utf-8")
+    (logs_dir / "run_20260102T000000Z.jsonl").write_text(
+        '{"event": "task_start"}\n{"event": "merge"}\n', encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(cli, ["logs"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert '"event": "task_start"' in result.output
+    assert "older" not in result.output, "only the newest run file is shown"
+
+
+def test_logs_tail_prints_last_lines_then_follows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    python_bin: str,
+    git_init,
+) -> None:
+    """--tail N shows the last N lines; the follow loop must be patchable so
+    the CLI test does not block on a real infinite poll."""
+    import orchestrator.main as main_module
+
+    calls: list[dict] = []
+
+    def fake_follow(path, pos, out, **kwargs):
+        calls.append({"path": path.name, "pos": pos})
+
+    monkeypatch.setattr(main_module, "follow_file", fake_follow)
+
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+    logs_dir = root / "logs"
+    logs_dir.mkdir()
+    log = logs_dir / "run_t.jsonl"
+    log.write_text("e1\ne2\ne3\n", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["logs", "--tail", "2"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "e1" not in result.output
+    assert "e3" in result.output and "e2" in result.output
+    assert len(calls) == 1
+    assert calls[0]["path"] == "run_t.jsonl"
+    assert calls[0]["pos"] == log.stat().st_size  # follow resumes at EOF
+
+
+def test_logs_tail_rejects_non_numeric_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    monkeypatch.chdir(root)
+    logs_dir = root / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "run_x.jsonl").write_text("e\n", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["logs", "--tail", "lots"])
+
+    assert result.exit_code != 0
+    assert "non-negative integer" in result.output
