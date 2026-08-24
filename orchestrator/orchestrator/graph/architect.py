@@ -22,16 +22,19 @@ from orchestrator.memory.store import StateStore
 _UNRESOLVED = ("pending", "pending_approval", "in_progress")
 
 
-def plan_epic(*, epic: Task, decomposer: EpicDecomposer, store: StateStore) -> list[Task]:
+def plan_epic(
+    *, epic: Task, decomposer: EpicDecomposer, store: StateStore, planning_context: str = ""
+) -> list[Task]:
     """Move an epic from pending to review by planning its domain leads.
 
     Children are persisted as ``pending_approval`` — the plan is inert until
     a human approves each domain. An empty decomposition fails the epic
-    immediately with an architect report.
+    immediately with an architect report. ``planning_context`` carries the
+    latest PROJECT_STATE.md section for LLM-backed decomposers (Phase 5).
     """
     epic.status = "in_progress"
     store.save_task(epic)
-    children = decomposer.decompose(epic)
+    children = decomposer.decompose(epic, context=planning_context)
     if not children:
         epic.status = "failed"
         store.save_task(epic)

@@ -70,11 +70,11 @@ def make_lead(domain: str = "backend") -> Task:
 
 
 def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
-          max_reconcile_attempts=1, max_workers=2, checkpointer=None):
+          max_reconcile_attempts=1, max_workers=2, checkpointer=None, runner=None):
     return build_lead_graph(
         store=store,
         worktrees=WorktreeManager(git_repo, git_repo / "workspaces"),
-        runner=ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
+        runner=runner or ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
         decomposer=decomposer,
         test_command=[python_bin, "-c", "print('tests ok')"],
         max_workers=max_workers,
@@ -202,3 +202,73 @@ def test_lead_graph_checkpoints_state_under_stable_thread(
     assert result["outcome"] == "review"
     assert result["snapshot_values"].get("outcome") == "review"
     assert result["snapshot_values"].get("lead_task", {}).get("id") == "lead-1"
+
+
+class ContextCapturingDecomposer:
+    """DomainDecomposer fake recording the planning context per call."""
+
+    def __init__(self) -> None:
+        self.contexts: list[str] = []
+
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
+        self.contexts.append(context)
+        return []
+
+
+def test_lead_passes_latest_repo_map_to_decomposer(
+    git_repo: Path, store: StateStore, python_bin: str, domains_dir: Path
+) -> None:
+    """Tier-1 memory feeds lead planning: the latest domain repo_map section
+    reaches the DomainDecomposer (the future LLM seam)."""
+    KnowledgeDocs().append_section(
+        domains_dir / "backend" / "repo_map.md",
+        title="seed",
+        body="PLANNING MARKER LMN",
+    )
+    capturing = ContextCapturingDecomposer()
+    graph = build(store, git_repo, python_bin, capturing, domains_dir=domains_dir)
+
+    result = asyncio.run(
+        asyncio.wait_for(graph.ainvoke({"lead_task": make_lead().model_dump()}), GRAPH_TIMEOUT_S)
+    )
+
+    assert result["outcome"] == "failed", "empty decomposition fails fast"
+    assert capturing.contexts and "PLANNING MARKER LMN" in capturing.contexts[0]
+
+
+class RecordingNoopRunner:
+    """Captures prompts; does no work so the pipeline stays fast."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def run(self, prompt: str, cwd: Path) -> object:
+        from orchestrator.execution.zcode_runner import RunnerResult
+
+        self.prompts.append(prompt)
+        return RunnerResult(returncode=0, stdout="ok", stderr="", timed_out=False, duration_s=0.0)
+
+
+def test_lead_graph_workers_receive_domain_knowledge_in_prompt(
+    git_repo: Path, store: StateStore, python_bin: str, domains_dir: Path
+) -> None:
+    """The knowledge wiring holds through nesting: manager subgraph workers
+    get the latest domain repo_map section inside their prompt."""
+    KnowledgeDocs().append_section(
+        domains_dir / "backend" / "repo_map.md",
+        title="seed",
+        body="PROMPT MARKER QQQ",
+    )
+    runner = RecordingNoopRunner()
+    graph = build(store, git_repo, python_bin,
+                  StaticDomainDecomposer(["slice one"]),
+                  domains_dir=domains_dir, runner=runner)
+
+    result = asyncio.run(
+        asyncio.wait_for(graph.ainvoke({"lead_task": make_lead().model_dump()}), GRAPH_TIMEOUT_S)
+    )
+
+    assert result["outcome"] == "review"
+    assert any("PROMPT MARKER QQQ" in p for p in runner.prompts), (
+        "worker prompts must carry the domain's latest repo_map section"
+    )

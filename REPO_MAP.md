@@ -13,13 +13,13 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/conftest.py` — sys.path setup plus python_bin fixture for subprocess-based tests.
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
-- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure mode, target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
 - `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; registers the Phase 4 epic commands.
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
-- `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
+- `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
@@ -27,11 +27,11 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 lead review: conflict-only reconciliation dispatch (capped once), immediate escalation of other failures.
 - `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
-- `orchestrator/orchestrator/graph/decompose.py` — Decomposer/DomainDecomposer/EpicDecomposer protocols; Static* decomposers (levels 0/1/2) and Single* defaults.
+- `orchestrator/orchestrator/graph/decompose.py` — Decomposer/DomainDecomposer/EpicDecomposer protocols with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with injectable semaphore concurrency cap.
-- `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation dispatch, repo_map.md knowledge append.
-- `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, and per-manager result summaries.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task) + async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
+- `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, and Tier-1 knowledge + checkpoint wiring.
+- `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
 - `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/diff/merge/discard/cleanup, repo-root discovery, MergeConflictError with conflicted-file extraction.

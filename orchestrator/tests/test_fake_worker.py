@@ -135,3 +135,28 @@ def test_fake_worker_detects_reconciler_from_prompt_id(
     assert proc.returncode == 0, proc.stderr
     text = (tmp_path / "shared.txt").read_text(encoding="utf-8")
     assert "reconciler" in text
+
+
+def test_fake_worker_sleep_mode_delays_before_success(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """Sleep mode keeps a worker busy so the Phase 5 kill/resume demo and
+    tests can catch a run mid-flight."""
+    import time
+
+    env = {**os.environ, "FAKE_WORKER_SLEEP_S": "1.5"}
+    started = time.monotonic()
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), "slow task"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    elapsed = time.monotonic() - started
+    assert proc.returncode == 0, proc.stderr
+    assert elapsed >= 1.4, "worker must actually sleep before doing its work"
+    module = module_name_for("slow task")
+    assert (tmp_path / f"{module}.py").is_file(), "sleep must not skip the work"

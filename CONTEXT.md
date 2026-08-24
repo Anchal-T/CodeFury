@@ -48,3 +48,16 @@ The single post-merge test run against the assembled repo root, catching individ
 
 **Retry cap**:
 The hard maximum number of attempts a Task may receive before it fails permanently; enforced in code, not just config.
+
+**Checkpoint** (Phase 5):
+A persisted LangGraph state snapshot for one lead thread in the same SQLite file (checkpoints/writes tables via the async checkpointer), letting the graph continue work across processes.
+_Avoid_: savepoint, snapshot
+
+**Thread id** (Phase 5):
+The stable LangGraph configurable `lead:<task id>` that binds one physical lead to one resumable thread; the same id in every process is what makes killed-session resume deterministic.
+
+**Resume** (Phase 5):
+Re-invoking a lead graph with the same thread id and input None so LangGraph continues from the last checkpoint instead of restarting; the store's status is reconciled from the returned outcome.
+
+**Tier-1 memory / knowledge context** (Phase 5):
+The cheapest memory tier — git-tracked markdown sections (repo_map.md per domain, PROJECT_STATE.md) read via KnowledgeDocs and prepended to worker prompts and planning seams. The future LLM seam for decomposers.

@@ -69,6 +69,34 @@ def test_plan_epic_with_no_domains_fails_the_epic(store: StateStore) -> None:
     assert any("no domain tasks" in b for b in report.blockers)
 
 
+class RecordingEpicDecomposer:
+    def __init__(self) -> None:
+        self.contexts: list[str] = []
+
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
+        self.contexts.append(context)
+        return [
+            task.model_copy(
+                update={"id": "lead-a", "parent_id": task.id, "level": 2,
+                        "domain": "backend", "status": "pending_approval"}
+            )
+        ]
+
+
+def test_plan_epic_passes_planning_context_to_decomposer(store: StateStore) -> None:
+    """Tier-1 memory feeds planning: the latest PROJECT_STATE section reaches
+    the epic decomposer (the future LLM seam)."""
+    decomposer = RecordingEpicDecomposer()
+    leads = plan_epic(
+        epic=make_epic(),
+        decomposer=decomposer,  # type: ignore[arg-type]
+        store=store,
+        planning_context="PROJECT STATE MARKER PS-9",
+    )
+    assert len(leads) == 1
+    assert decomposer.contexts == ["PROJECT STATE MARKER PS-9"]
+
+
 def _plan_two_leads(store: StateStore) -> tuple[Task, list[Task]]:
     epic = make_epic()
     leads = plan_epic(

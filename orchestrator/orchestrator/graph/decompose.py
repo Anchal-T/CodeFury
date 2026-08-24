@@ -3,6 +3,11 @@
 The Decomposer protocols are the seams where LLM-backed decomposers plug in
 once a headless coding-agent CLI is available; the Static* implementations
 are deterministic and used by tests and demos.
+
+``context`` (Phase 5 planning seam): callers pass the latest knowledge
+section — domain repo_map.md for leads, PROJECT_STATE.md for epics — so
+LLM-backed decomposers can plan with current project knowledge. The
+deterministic fakes accept and ignore it.
 """
 
 from __future__ import annotations
@@ -16,13 +21,13 @@ from orchestrator.contracts import Task
 class Decomposer(Protocol):
     """Turns a manager Task into its level-0 worker Tasks."""
 
-    def decompose(self, task: Task) -> list[Task]: ...
+    def decompose(self, task: Task, context: str = "") -> list[Task]: ...
 
 
 class DomainDecomposer(Protocol):
     """Turns a domain-lead Task into its level-1 manager Tasks."""
 
-    def decompose(self, task: Task) -> list[Task]: ...
+    def decompose(self, task: Task, context: str = "") -> list[Task]: ...
 
 
 def is_decomposer(obj: object) -> bool:
@@ -61,7 +66,7 @@ class StaticDecomposer:
     def __init__(self, sub_goals: list[str]) -> None:
         self.sub_goals = list(sub_goals)
 
-    def decompose(self, task: Task) -> list[Task]:
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
         return _children(task, level=0, goals=self.sub_goals)
 
 
@@ -71,7 +76,7 @@ class StaticDomainDecomposer:
     def __init__(self, manager_goals: list[str]) -> None:
         self.manager_goals = list(manager_goals)
 
-    def decompose(self, task: Task) -> list[Task]:
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
         return _children(task, level=1, goals=self.manager_goals)
 
 
@@ -80,8 +85,8 @@ class SingleWorkerDecomposer:
     carrying the manager's own goal (deterministic; swap in an LLM-backed
     Decomposer per manager when one is available)."""
 
-    def decompose(self, task: Task) -> list[Task]:
-        return StaticDecomposer([task.goal]).decompose(task)
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
+        return StaticDecomposer([task.goal]).decompose(task, context=context)
 
 
 class SingleManagerDecomposer:
@@ -89,14 +94,14 @@ class SingleManagerDecomposer:
     carrying the lead's own goal (deterministic; swap in an LLM-backed
     DomainDecomposer per lead when one is available)."""
 
-    def decompose(self, task: Task) -> list[Task]:
-        return StaticDomainDecomposer([task.goal]).decompose(task)
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
+        return StaticDomainDecomposer([task.goal]).decompose(task, context=context)
 
 
 class EpicDecomposer(Protocol):
     """Turns an epic Task into its level-2 domain-lead Tasks."""
 
-    def decompose(self, task: Task) -> list[Task]: ...
+    def decompose(self, task: Task, context: str = "") -> list[Task]: ...
 
 
 class StaticEpicDecomposer:
@@ -112,7 +117,7 @@ class StaticEpicDecomposer:
                 raise ValueError(f"epic entry {goal!r} is missing a domain")
         self.domain_goals = list(domain_goals)
 
-    def decompose(self, task: Task) -> list[Task]:
+    def decompose(self, task: Task, context: str = "") -> list[Task]:
         goals = [goal for goal, _domain in self.domain_goals]
         domains = [domain for _goal, domain in self.domain_goals]
         return _children(task, level=2, goals=goals, status="pending_approval", domains=domains)
