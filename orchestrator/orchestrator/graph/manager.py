@@ -10,6 +10,7 @@ from pathlib import Path
 
 from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
 from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
+from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.outcome_recorder import (
     IntegrationGate,
@@ -66,6 +67,14 @@ def review_reports(
                 continue
             decision.merged.append(task.id)
             store.set_task_status(task.id, "done")
+            continue
+
+        if any(b.startswith(BUDGET_EXHAUSTED_PREFIX) for b in report.blockers):
+            # The level is out of tokens: a retry would bounce off the gate
+            # instantly. Fail for good and surface the budget blocker.
+            decision.failed.append(task.id)
+            decision.blockers.extend(report.blockers)
+            store.set_task_status(task.id, "failed")
             continue
 
         if retry_policy.can_retry(task.id, attempts.get(task.id, 0)):

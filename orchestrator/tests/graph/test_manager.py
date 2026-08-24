@@ -162,6 +162,36 @@ def test_merge_conflict_fails_without_retry(deps, store: StateStore, git_repo: P
     assert store.get_task("w-1").status == "failed"
 
 
+def test_budget_blocker_fails_without_retry(deps, store: StateStore) -> None:
+    """A budget-gated report means the level is out of tokens — re-dispatching
+    would just bounce off the gate again; fail immediately instead."""
+    from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX
+
+    worktrees, policy = deps
+    task = make_worker_task("w-1", status="failed")
+    store.save_task(task)
+    report = make_report("w-1", passed=False).model_copy(
+        update={
+            "summary": "skipped: level token budget exhausted",
+            "blockers": [f"{BUDGET_EXHAUSTED_PREFIX} for level 0 (worker): 10/10 tokens used"],
+        }
+    )
+
+    decision = review_reports(
+        reports=[report],
+        worker_tasks=[task],
+        attempts={"w-1": 1},  # retries are NOT exhausted — budget decides
+        worktrees=worktrees,
+        retry_policy=policy,
+        store=store,
+    )
+    assert decision.retry == []
+    assert decision.failed == ["w-1"]
+    assert decision.all_done
+    assert any(b.startswith(BUDGET_EXHAUSTED_PREFIX) for b in decision.blockers)
+    assert store.get_task("w-1").status == "failed"
+
+
 def test_missing_report_means_not_done(deps, store: StateStore) -> None:
     worktrees, policy = deps
     task_a = make_worker_task("w-1")
