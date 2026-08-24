@@ -239,6 +239,50 @@ class StateStore:
             ).fetchone()
         return Report.model_validate_json(row["payload"]) if row else None
 
+    # -- token usage ---------------------------------------------------------
+
+    def add_token_usage(self, level: int, tokens: int) -> None:
+        """Attribute ``tokens`` to a hierarchy level's own spend (plan §3.6)."""
+        with self._lock:
+
+            def _insert() -> None:
+                self.connection().execute(
+                    "INSERT INTO token_usage (level, tokens) VALUES (?, ?)",
+                    (level, tokens),
+                )
+                self.connection().commit()
+
+            _with_lock_retry(_insert)
+
+    def total_tokens_by_level(self, level: int) -> int:
+        with self._lock:
+            row = self.connection().execute(
+                "SELECT COALESCE(SUM(tokens), 0) AS total FROM token_usage WHERE level = ?",
+                (level,),
+            ).fetchone()
+        return int(row["total"])
+
+    # -- introspection for the CLI -------------------------------------------
+
+    def all_tasks(self) -> list[Task]:
+        """Every persisted task, in insertion order (rowid)."""
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT payload FROM tasks ORDER BY rowid"
+            ).fetchall()
+        return [Task.model_validate_json(row["payload"]) for row in rows]
+
+    def latest_tokens_by_task(self) -> dict[str, int]:
+        """Latest report's tokens_used per task id — display data for `status`."""
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT task_id, tokens_used FROM reports ORDER BY id"
+            ).fetchall()
+        tokens: dict[str, int] = {}
+        for row in rows:
+            tokens[row["task_id"]] = int(row["tokens_used"])
+        return tokens
+
     # -- introspection -----------------------------------------------------
 
     def table_names(self) -> tuple[str, ...]:

@@ -340,3 +340,36 @@ def test_tasks_by_status_filters_across_parents(store: StateStore) -> None:
     waiting = store.tasks_by_status("pending_approval")
     assert [t.id for t in waiting] == ["lead-a"]
     assert store.tasks_by_status("done") == []
+
+
+def test_token_usage_sums_per_level(store: StateStore) -> None:
+    """BudgetTracker reads these sums; levels are counted independently."""
+    store.add_token_usage(0, 100)
+    store.add_token_usage(0, 50)
+    store.add_token_usage(1, 25)
+    assert store.total_tokens_by_level(0) == 150
+    assert store.total_tokens_by_level(1) == 25
+    assert store.total_tokens_by_level(2) == 0
+    assert store.total_tokens_by_level(3) == 0
+
+
+def test_all_tasks_returns_every_task_in_save_order(store: StateStore) -> None:
+    parent = make_task("mgr-1").model_copy(update={"level": 1})
+    child_a = make_task("w-a").model_copy(update={"parent_id": "mgr-1"})
+    child_b = make_task("w-b").model_copy(update={"parent_id": "mgr-1"})
+    store.save_task(child_b)
+    store.save_task(parent)
+    store.save_task(child_a)
+
+    tasks = store.all_tasks()
+    assert [t.id for t in tasks] == ["w-b", "mgr-1", "w-a"]
+
+
+def test_latest_tokens_by_task_takes_last_report(store: StateStore) -> None:
+    """Retries overwrite earlier usage in the display map: the latest report
+    per task wins, matching latest_report()."""
+    store.save_report(make_report("t1").model_copy(update={"tokens_used": 10}))
+    store.save_report(make_report("t2").model_copy(update={"tokens_used": 30}))
+    store.save_report(make_report("t1").model_copy(update={"tokens_used": 20}))
+
+    assert store.latest_tokens_by_task() == {"t1": 20, "t2": 30}
