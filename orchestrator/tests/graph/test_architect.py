@@ -2,6 +2,7 @@
 approval gate, epic finalization, and the approved-leads resume driver."""
 
 import asyncio
+import typing
 from pathlib import Path
 
 import pytest
@@ -143,10 +144,10 @@ def test_run_approved_leads_runs_only_approved(store: StateStore) -> None:
     received: list[str] = []
 
     class StubGraph:
-        async def ainvoke(self, state: dict) -> dict:
+        async def ainvoke(self, state: dict, config: dict | None = None) -> dict:
             return {"outcome": "review", "lead_id": state["lead_task"]["id"]}
 
-    def factory(lead: Task) -> StubGraph:
+    def factory(lead: Task, _checkpointer) -> StubGraph:
         received.append(lead.id)
         return StubGraph()
 
@@ -159,8 +160,9 @@ def test_run_approved_leads_runs_only_approved(store: StateStore) -> None:
 
 
 def test_run_approved_leads_recovers_interrupted_leads(store: StateStore) -> None:
-    """A lead left in_progress by a killed run must be re-run on resume —
-    otherwise the epic can never finalize and nothing reports why."""
+    """Without a checkpointer (Phase-4 fallback), a lead left in_progress by a
+    killed run is reset to pending and re-run — otherwise the epic could
+    never finalize and nothing would report why."""
     epic, leads = _plan_two_leads(store)
     store.set_task_status(leads[0].id, "pending")      # approved, not yet started
     store.set_task_status(leads[1].id, "in_progress")  # interrupted mid-run
@@ -168,10 +170,10 @@ def test_run_approved_leads_recovers_interrupted_leads(store: StateStore) -> Non
     received: list[Task] = []
 
     class StubGraph:
-        async def ainvoke(self, state: dict) -> dict:
+        async def ainvoke(self, state: dict, config: dict | None = None) -> dict:
             return {"outcome": "review"}
 
-    def factory(lead: Task) -> StubGraph:
+    def factory(lead: Task, _checkpointer) -> StubGraph:
         received.append(lead)
         return StubGraph()
 
@@ -183,3 +185,82 @@ def test_run_approved_leads_recovers_interrupted_leads(store: StateStore) -> Non
         "interrupted leads are reset before re-dispatch"
     )
     assert len(outcomes) == 2
+
+
+class _TrivialState(typing.TypedDict, total=False):
+    n: int
+
+
+class RecordingGraph:
+    """Stub lead graph capturing (input, thread_id) per invocation."""
+
+    def __init__(self, sink: list[tuple[dict | None, str]]) -> None:
+        self.sink = sink
+
+    async def ainvoke(self, state: dict | None, config: dict | None = None) -> dict:
+        self.sink.append((state, config["configurable"]["thread_id"]))
+        return {"outcome": "review"}
+
+
+def _seed_checkpoint(store: StateStore, thread_id: str) -> None:
+    """Write one real checkpoint onto a thread via a throwaway graph."""
+    from langgraph.constants import END, START
+    from langgraph.graph import StateGraph
+
+    async def _seed() -> None:
+        builder = StateGraph(_TrivialState)
+        builder.add_node("noop", lambda state: {"n": state.get("n", 0)})
+        builder.add_edge(START, "noop")
+        builder.add_edge("noop", END)
+        async with store.open_checkpointer() as saver:
+            await builder.compile(checkpointer=saver).ainvoke(
+                {"n": 0}, {"configurable": {"thread_id": thread_id}}
+            )
+
+    asyncio.run(_seed())
+
+
+def test_run_approved_leads_resumes_interrupted_lead_from_checkpoint(
+    store: StateStore,
+) -> None:
+    """An in_progress lead whose thread holds a checkpoint is resumed with
+    input=None — never restarted, never reset."""
+    epic, leads = _plan_two_leads(store)
+    lead = leads[0]
+    store.set_task_status(lead.id, "in_progress")  # killed mid-run last session
+    _seed_checkpoint(store, f"lead:{lead.id}")
+
+    received: list[tuple[dict | None, str]] = []
+    outcomes = run_approved_leads(
+        store=store,
+        epic=store.get_task("epic-1"),
+        lead_graph_factory=lambda _lead, _cp: RecordingGraph(received),
+    )
+
+    assert len(outcomes) == 1
+    state, thread = received[0]
+    assert thread == f"lead:{lead.id}", "stable thread id derived from the task id"
+    assert state is None, "resume passes None so LangGraph continues the saved thread"
+    assert store.get_task(lead.id).status == "review", (
+        "driver reconciles stored status from the returned outcome"
+    )
+
+
+def test_run_approved_leads_starts_fresh_lead_with_task_input(
+    store: StateStore,
+) -> None:
+    """A lead with no checkpoint yet gets the standard initial invocation."""
+    epic, leads = _plan_two_leads(store)
+    store.set_task_status(leads[0].id, "pending")
+    expected_input = {"lead_task": store.get_task(leads[0].id).model_dump()}
+
+    received: list[tuple[dict | None, str]] = []
+    run_approved_leads(
+        store=store,
+        epic=store.get_task("epic-1"),
+        lead_graph_factory=lambda _lead, _cp: RecordingGraph(received),
+    )
+
+    state, thread = received[0]
+    assert thread == f"lead:{leads[0].id}"
+    assert state == expected_input

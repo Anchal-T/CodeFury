@@ -65,8 +65,15 @@ def build_lead_graph(
     domains_dir: Path | None = None,
     worker_decomposer=None,
     retry_policy: RetryPolicy | None = None,
+    checkpointer=None,
 ):
-    """Assemble and compile Architect-less lead → managers → workers graph."""
+    """Assemble and compile Architect-less lead → managers → workers graph.
+
+    ``checkpointer`` (a LangGraph BaseCheckpointSaver, typically
+    ``StateStore.checkpointer()``) makes the whole run — including the nested
+    manager/worker subgraphs — resumable under a stable
+    ``thread_id = lead:<task id>``; None keeps runs non-persistent.
+    """
     knowledge = knowledge or KnowledgeDocs()
     retry_policy = retry_policy or RetryPolicy()
     semaphore = asyncio.Semaphore(max_workers)
@@ -270,4 +277,4 @@ def build_lead_graph(
     builder.add_conditional_edges("lead", route, ["manager", "worker", END])
     builder.add_edge("manager", "lead")
     builder.add_edge("worker", "lead")
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)

@@ -3,8 +3,8 @@ approval gate, epic finalization, and the approved-leads resume driver.
 
 The approval gate is status-driven: planned domain leads sit in
 ``pending_approval`` until a human flips them (CLI ``approve``); the resume
-driver then runs each *approved* lead through its lead graph. No graph
-interrupts are needed — checkpoint-based pause/resume arrives in Phase 5.
+driver then runs each *approved* lead through its lead graph, resuming
+checkpointed threads after a killed session (Phase 5).
 """
 
 from __future__ import annotations
@@ -102,35 +102,75 @@ def finalize_epic(
     return report
 
 
+def thread_config(lead: Task) -> dict:
+    """Stable per-lead LangGraph thread id.
+
+    Task ids are global primary keys in SQLite, so the same physical lead
+    maps to the same checkpointed thread in every process — the seam that
+    makes killed-session resume deterministic.
+    """
+    return {"configurable": {"thread_id": f"lead:{lead.id}"}}
+
+
 def run_approved_leads(
     *,
     store: StateStore,
     epic: Task,
-    lead_graph_factory: Callable[[Task], Any],
+    lead_graph_factory: Callable[[Task, Any], Any],
 ) -> list[dict]:
-    """Run each approved lead of the epic, sequentially.
+    """Run each approved lead of the epic, sequentially, resuming threads.
 
     ``pending_approval`` leads are skipped by query — the gate is enforced
-    here, not by convention. A lead left ``in_progress`` by an interrupted
-    run is reset to ``pending`` and re-run (it must have been approved to
-    have started), so a killed session never deadlocks the epic. Returns one
+    here, not by convention.
+
+    The driver owns the checkpointer lifecycle (AsyncSqliteSaver on the
+    store's db file — langgraph 1.x requires async checkpointers and a
+    running loop at construction). A lead left ``in_progress`` by a killed
+    session whose thread holds a checkpoint resumes it (``ainvoke(None,
+    ...)``) instead of restarting; without a checkpoint an interrupted lead
+    is reset to ``pending`` and started fresh, so a kill can never deadlock
+    the epic. After each run the driver reconciles the lead's stored status
+    from the returned outcome, closing the crash window where the graph
+    finished but the terminal status never reached SQLite. Returns one
     outcome dict per executed lead.
     """
-    runnable: list[Task] = []
-    for lead in store.tasks_by_parent(epic.id):
-        if lead.status == "pending":
-            runnable.append(lead)
-        elif lead.status == "in_progress":
-            store.set_task_status(lead.id, "pending")
-            lead.status = "pending"
-            runnable.append(lead)
+    children = store.tasks_by_parent(epic.id)
+    if not any(lead.status in ("pending", "in_progress") for lead in children):
+        return []
 
     async def _run() -> list[dict]:
         outcomes: list[dict] = []
-        for lead in runnable:
-            graph = lead_graph_factory(lead)
-            outcome = await graph.ainvoke({"lead_task": lead.model_dump()})
-            outcomes.append(dict(outcome))
+        async with store.open_checkpointer() as checkpointer:
+            plan: list[tuple[Task, bool]] = []  # (lead, resume?)
+            for lead in children:
+                if lead.status == "pending":
+                    plan.append((lead, False))
+                elif lead.status == "in_progress":
+                    resumable = await checkpointer.aget_tuple(thread_config(lead)) is not None
+                    if not resumable:
+                        store.set_task_status(lead.id, "pending")
+                        lead.status = "pending"
+                    plan.append((lead, resumable))
+            for lead, resume in plan:
+                graph = lead_graph_factory(lead, checkpointer)
+                config = thread_config(lead)
+                if resume:
+                    outcome = dict(await graph.ainvoke(None, config=config))
+                else:
+                    outcome = dict(
+                        await graph.ainvoke({"lead_task": lead.model_dump()}, config=config)
+                    )
+                _reconcile_status(store, lead, outcome)
+                outcomes.append(outcome)
         return outcomes
 
     return asyncio.run(_run())
+
+
+def _reconcile_status(store: StateStore, lead: Task, outcome: dict) -> None:
+    """Align the stored lead status with the graph's terminal outcome."""
+    terminal = outcome.get("outcome")
+    if terminal in ("review", "failed"):
+        current = store.get_task(lead.id)
+        if current is not None and current.status != terminal:
+            store.set_task_status(lead.id, terminal)

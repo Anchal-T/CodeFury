@@ -69,7 +69,7 @@ def start(
         knowledge = KnowledgeDocs()
         domains_dir = base / config.paths.domains
 
-        def lead_graph_factory(lead: Task):
+        def lead_graph_factory(lead: Task, checkpointer):
             return build_lead_graph(
                 store=store,
                 worktrees=worktrees,
@@ -80,6 +80,7 @@ def start(
                 max_reconcile_attempts=config.retries.max_reconcile_attempts,
                 knowledge=knowledge,
                 domains_dir=domains_dir,
+                checkpointer=checkpointer,
             )
 
         click.echo(f"[start] resuming epic {epic.id} ('{epic.goal}')")

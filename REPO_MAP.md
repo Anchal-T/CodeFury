@@ -23,7 +23,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
 - `orchestrator/orchestrator/logging_setup.py` — JSONL structured logging setup.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
-- `orchestrator/orchestrator/graph/architect.py` — Level 3 epic planning with the pending_approval gate, epic finalization + PROJECT_STATE.md, and the approved-leads resume driver.
+- `orchestrator/orchestrator/graph/architect.py` — Level 3 epic planning with the pending_approval gate, epic finalization + PROJECT_STATE.md, and the checkpoint-aware approved-leads resume driver (stable thread ids).
 - `orchestrator/orchestrator/graph/domain_lead.py` — Level 2 lead review: conflict-only reconciliation dispatch (capped once), immediate escalation of other failures.
 - `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
@@ -38,7 +38,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo, incl. typed merge-conflict errors.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe: tasks/reports/agents/token_usage + SqliteSaver checkpointer on the same file (legacy checkpoints stub migrated away) + typed round-trips and parent/status queries.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage + typed round-trips and parent/status queries; open_checkpointer() shares this one connection.
+- `orchestrator/orchestrator/memory/checkpointer.py` — async LangGraph checkpointer facade over sync SqliteSaver on StateStore's single connection.
 - `orchestrator/tests/memory/test_store.py` — schema, WAL mode, round-trip and thread-safety tests.
 - `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
 - `orchestrator/orchestrator/memory/knowledge_docs.py` — Tier-1 markdown knowledge docs: read_latest + append-only UTC-timestamped sections.

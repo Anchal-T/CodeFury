@@ -1,5 +1,6 @@
 """Tests for orchestrator.memory.store (SQLite WAL persistence)."""
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import TypedDict
@@ -75,7 +76,12 @@ def test_init_schema_drops_legacy_stub_checkpoints_table(tmp_path: Path) -> None
 def test_init_schema_keeps_saver_checkpoints_table(store: StateStore) -> None:
     """Once the checkpointer has created its own tables, re-running
     init_schema must never drop them."""
-    store.checkpointer().get_tuple({"configurable": {"thread_id": "t"}})
+
+    async def _touch() -> None:
+        async with store.open_checkpointer() as saver:
+            await saver.aget_tuple({"configurable": {"thread_id": "t"}})
+
+    asyncio.run(_touch())
     store.init_schema()
     assert "checkpoints" in set(store.table_names())
     assert "writes" in set(store.table_names())
@@ -85,20 +91,23 @@ class _TrivialState(TypedDict, total=False):
     n: int
 
 
-def _trivial_graph(checkpointer):
+def _trivial_builder():
     builder = StateGraph(_TrivialState)
     builder.add_node("add", lambda state: {"n": state.get("n", 0) + 1})
     builder.add_edge(START, "add")
     builder.add_edge("add", END)
-    return builder.compile(checkpointer=checkpointer)
+    return builder
 
 
-def test_checkpointer_returns_cached_sqlite_saver(store: StateStore) -> None:
-    from langgraph.checkpoint.sqlite import SqliteSaver
+def test_open_checkpointer_yields_shared_connection_saver(store: StateStore) -> None:
+    from orchestrator.memory.checkpointer import SharedConnectionCheckpointer
 
-    saver = store.checkpointer()
-    assert isinstance(saver, SqliteSaver)
-    assert store.checkpointer() is saver
+    async def _probe() -> SharedConnectionCheckpointer:
+        async with store.open_checkpointer() as saver:
+            assert isinstance(saver, SharedConnectionCheckpointer)
+            return saver
+
+    assert isinstance(asyncio.run(_probe()), SharedConnectionCheckpointer)
 
 
 def test_checkpointer_round_trip_survives_reopen(tmp_path: Path) -> None:
@@ -106,18 +115,31 @@ def test_checkpointer_round_trip_survives_reopen(tmp_path: Path) -> None:
     readable by a fresh StateStore on the same db file."""
     db = tmp_path / "data" / "cp.db"
     config = {"configurable": {"thread_id": "lead:t1"}}
-    with StateStore(db) as store:
-        store.init_schema()
-        graph = _trivial_graph(store.checkpointer())
-        graph.invoke({"n": 1}, config)
-        assert "checkpoints" in set(store.table_names())
 
-    with StateStore(db) as reopened:
-        reopened.init_schema()
-        graph = _trivial_graph(reopened.checkpointer())
-        snapshot = graph.get_state(config)
-        # The first process's completed run left n=2 (1 in, +1 in the node).
-        assert snapshot.values.get("n") == 2
+    # First process: write a checkpoint through the store's checkpointer.
+    async def _run_first() -> None:
+        with StateStore(db) as store:
+            store.init_schema()
+            async with store.open_checkpointer() as saver:
+                graph = _trivial_builder().compile(checkpointer=saver)
+                await graph.ainvoke({"n": 1}, config)
+            names = set(store.table_names())
+            assert "checkpoints" in names
+
+    asyncio.run(_run_first())
+
+    # Second process: fresh StateStore reads the same thread.
+    async def _run_second() -> dict:
+        with StateStore(db) as reopened:
+            reopened.init_schema()
+            async with reopened.open_checkpointer() as saver:
+                graph = _trivial_builder().compile(checkpointer=saver)
+                snapshot = await graph.aget_state(config)
+                return snapshot.values
+
+    values = asyncio.run(_run_second())
+    # The first process's completed run left n=2 (1 in, +1 in the node).
+    assert values.get("n") == 2
 
 
 def test_wal_mode_enabled(store: StateStore) -> None:
@@ -176,9 +198,51 @@ def test_db_file_created_in_missing_dir(tmp_path: Path) -> None:
         store.close()
 
 
+def test_save_task_retries_through_write_lock_contention(store: StateStore) -> None:
+    """A second connection (the checkpoint saver) holding SQLite's write lock
+    past one busy-timeout window must not lose a task save — StateStore
+    retries through the contention instead of failing the run."""
+    import threading
+    import time
+
+    raw = sqlite3.connect(str(store.db_path), check_same_thread=False, isolation_level=None)
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        raw.execute("CREATE TABLE IF NOT EXISTS hold (x TEXT)")
+        raw.execute("INSERT INTO hold VALUES ('locking')")
+
+        errors: list[Exception] = []
+        done = threading.Event()
+
+        def do_save() -> None:
+            try:
+                store.save_task(make_task("contended"))
+            except Exception as exc:  # noqa: BLE001 — asserted below
+                errors.append(exc)
+            finally:
+                done.set()
+
+        writer = threading.Thread(target=do_save)
+        writer.start()
+        time.sleep(4.0)  # longer than one busy_timeout window (3s)
+        raw.execute("COMMIT")
+        writer.join(timeout=15)
+
+        assert done.is_set(), "save_task never completed"
+        assert errors == [], f"save_task failed under contention: {errors}"
+        assert store.get_task("contended") is not None
+    finally:
+        try:
+            raw.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            pass
+        raw.close()
+
+
 def test_concurrent_writes_from_threads(store: StateStore) -> None:
     """Workers will run in threads (asyncio.to_thread); the store must cope."""
     import threading
+
 
     errors: list[Exception] = []
 

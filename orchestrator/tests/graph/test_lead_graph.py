@@ -70,7 +70,7 @@ def make_lead(domain: str = "backend") -> Task:
 
 
 def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
-          max_reconcile_attempts=1, max_workers=2):
+          max_reconcile_attempts=1, max_workers=2, checkpointer=None):
     return build_lead_graph(
         store=store,
         worktrees=WorktreeManager(git_repo, git_repo / "workspaces"),
@@ -81,6 +81,7 @@ def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
         max_reconcile_attempts=max_reconcile_attempts,
         knowledge=KnowledgeDocs(),
         domains_dir=domains_dir,
+        checkpointer=checkpointer,
     )
 
 
@@ -174,3 +175,30 @@ def test_lead_graph_empty_decomposition_fails_fast(
 
     assert result["outcome"] == "failed"
     assert any("no manager tasks" in b for b in result["blockers"])
+
+
+def test_lead_graph_checkpoints_state_under_stable_thread(
+    git_repo: Path, store: StateStore, python_bin: str, domains_dir: Path
+) -> None:
+    """Compiled with a checkpointer, the finished lead run leaves its full
+    state readable under thread_id lead:<task id> — the Phase 5 resume seam."""
+
+    async def _flow() -> dict:
+        async with store.open_checkpointer() as checkpointer:
+            graph = build(store, git_repo, python_bin,
+                          StaticDomainDecomposer(["slice one", "slice two"]),
+                          domains_dir=domains_dir,
+                          checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": "lead:lead-1"}}
+            result = await asyncio.wait_for(
+                graph.ainvoke({"lead_task": make_lead().model_dump()}, config),
+                GRAPH_TIMEOUT_S,
+            )
+            snapshot = await graph.aget_state(config)
+            return {**result, "snapshot_values": snapshot.values}
+
+    result = asyncio.run(_flow())
+
+    assert result["outcome"] == "review"
+    assert result["snapshot_values"].get("outcome") == "review"
+    assert result["snapshot_values"].get("lead_task", {}).get("id") == "lead-1"
