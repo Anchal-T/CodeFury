@@ -15,7 +15,8 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure mode, target/content modes, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/start/status/approve/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph, start/approve the Phase 4 epic flow.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; registers the Phase 4 epic commands.
+- `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries) with ZCODE_CMD env override and concurrency validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract.
