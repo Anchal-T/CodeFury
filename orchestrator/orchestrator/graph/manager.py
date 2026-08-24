@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
 from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
@@ -18,6 +19,9 @@ from orchestrator.graph.outcome_recorder import (
     RecordRequest,
 )
 from orchestrator.memory.store import StateStore
+
+if TYPE_CHECKING:
+    from orchestrator.logging_setup import RunLogger
 
 
 @dataclass
@@ -39,6 +43,7 @@ def review_reports(
     worktrees: WorktreeManager,
     retry_policy: RetryPolicy,
     store: StateStore,
+    runlog: "RunLogger | None" = None,
 ) -> ReviewDecision:
     """Review the latest report per worker task and act on it.
 
@@ -46,6 +51,7 @@ def review_reports(
     a merge that conflicts fails the task without retry (conflict resolution
     is Domain Lead territory, Phase 3); anything failed within budget goes
     back to pending for another dispatch; past the cap it fails for good.
+    ``runlog`` receives merge/retry events (Phase 6).
     """
     decision = ReviewDecision()
     latest_by_task = {report.task_id: report for report in reports}
@@ -67,6 +73,8 @@ def review_reports(
                 continue
             decision.merged.append(task.id)
             store.set_task_status(task.id, "done")
+            if runlog is not None:
+                runlog.event("merge", task_id=task.id)
             continue
 
         if any(b.startswith(BUDGET_EXHAUSTED_PREFIX) for b in report.blockers):
@@ -81,6 +89,8 @@ def review_reports(
             task.status = "pending"
             store.save_task(task)
             decision.retry.append(task.model_dump())
+            if runlog is not None:
+                runlog.event("retry", task_id=task.id, attempt=attempts.get(task.id, 0) + 1)
         else:
             decision.failed.append(task.id)
             decision.blockers.append(f"worker {task.id} exhausted retries")
@@ -99,6 +109,7 @@ def finalize_parent(
     store: StateStore,
     repo_root: Path | None = None,
     test_command: list[str] | None = None,
+    runlog: "RunLogger | None" = None,
 ) -> Report:
     """Persist the parent task's final status and its aggregate Report.
 
@@ -114,6 +125,7 @@ def finalize_parent(
             if repo_root is not None and test_command is not None
             else None
         ),
+        runlog=runlog,
     )
     return recorder.record(
         parent,

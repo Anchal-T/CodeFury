@@ -66,6 +66,8 @@ def build_lead_graph(
     worker_decomposer=None,
     retry_policy: RetryPolicy | None = None,
     checkpointer=None,
+    budget=None,
+    runlog=None,
 ):
     """Assemble and compile Architect-less lead → managers → workers graph.
 
@@ -73,6 +75,7 @@ def build_lead_graph(
     ``StateStore.checkpointer()``) makes the whole run — including the nested
     manager/worker subgraphs — resumable under a stable
     ``thread_id = lead:<task id>``; None keeps runs non-persistent.
+    ``budget`` + ``runlog`` thread Phase 6 governance through every level.
     """
     knowledge = knowledge or KnowledgeDocs()
     retry_policy = retry_policy or RetryPolicy()
@@ -92,6 +95,8 @@ def build_lead_graph(
         worker_semaphore=semaphore,
         knowledge=knowledge,
         domains_dir=domains_dir,
+        budget=budget,
+        runlog=runlog,
     )
     reconcile_worker = make_worker_node(
         store=store,
@@ -103,6 +108,8 @@ def build_lead_graph(
         semaphore=semaphore,
         knowledge=knowledge,
         domains_dir=domains_dir,
+        budget=budget,
+        runlog=runlog,
     )
 
     recorder = OutcomeRecorder(
@@ -112,6 +119,7 @@ def build_lead_graph(
             repo_root=worktrees.repo_root, test_command=test_command
         ),
         knowledge=knowledge,
+        runlog=runlog,
     )
 
     def _finalize(

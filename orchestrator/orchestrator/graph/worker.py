@@ -12,6 +12,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.config import PYTEST_NO_TESTS_EXIT_CODE
 from orchestrator.contracts import Report, Task
@@ -20,6 +21,9 @@ from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.memory.store import StateStore
 from orchestrator.prompts import build_worker_prompt
+
+if TYPE_CHECKING:
+    from orchestrator.logging_setup import RunLogger
 
 TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
@@ -106,6 +110,7 @@ def run_worker_task(
     tests_timeout: float = TEST_TIMEOUT_S,
     knowledge_context: str = "",
     budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
@@ -115,7 +120,8 @@ def run_worker_task(
     ``knowledge_context`` carries the latest Tier-1 memory section (plan §9
     Phase 5) into the worker prompt. ``budget`` (Phase 6) gates the dispatch:
     an exhausted level budget short-circuits with a blocker Report before any
-    worktree or subprocess exists.
+    worktree or subprocess exists. ``runlog`` receives task_start/task_end
+    events for the JSONL run log (Phase 6).
     """
     task.status = "in_progress"
     store.save_task(task)
@@ -129,6 +135,7 @@ def run_worker_task(
             tests_timeout=tests_timeout,
             knowledge_context=knowledge_context,
             budget=budget,
+            runlog=runlog,
         )
     except Exception as exc:
         report = Report(
@@ -156,7 +163,11 @@ def _run_pipeline(
     tests_timeout: float,
     knowledge_context: str = "",
     budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ) -> Report:
+    if runlog is not None:
+        runlog.event("task_start", task_id=task.id, level=task.level)
+
     if budget is not None and budget.exceeded(task.level):
         report = Report(
             task_id=task.id,
@@ -170,6 +181,8 @@ def _run_pipeline(
         store.save_report(report)
         task.status = "failed"
         store.save_task(task)
+        if runlog is not None:
+            runlog.event("task_end", task_id=task.id, status=task.status)
         return report
 
     worktree = worktrees.create(task.id)
@@ -194,6 +207,8 @@ def _run_pipeline(
     store.save_report(report)
     task.status = "failed" if blockers else "review"
     store.save_task(task)
+    if runlog is not None:
+        runlog.event("task_end", task_id=task.id, status=task.status)
     return report
 
 
@@ -209,6 +224,7 @@ def make_worker_node(
     knowledge: KnowledgeDocs | None = None,
     domains_dir: Path | None = None,
     budget: BudgetTracker | None = None,
+    runlog: "RunLogger | None" = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
@@ -225,7 +241,7 @@ def make_worker_node(
 
     ``budget`` (Phase 6) gates every dispatch at the pipeline choke point:
     an exhausted level budget yields an instant blocker Report instead of a
-    spawned worker.
+    spawned worker. ``runlog`` receives task_start/task_end events.
     """
     if max_workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
@@ -251,6 +267,7 @@ def make_worker_node(
                 tests_timeout=tests_timeout,
                 knowledge_context=knowledge_context,
                 budget=budget,
+                runlog=runlog,
             )
         return {
             "reports": [report.model_dump()],

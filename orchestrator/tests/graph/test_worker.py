@@ -432,6 +432,52 @@ def test_worker_node_without_knowledge_wiring_omits_context(
 # -- Phase 6: token attribution + budget gate -------------------------------
 
 
+class MemoryRunLogger:
+    """Test double capturing events in order."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def event(self, kind: str, **fields: object) -> None:
+        self.events.append((kind, dict(fields)))
+
+
+def test_pipeline_emits_task_start_and_end_events(pipeline) -> None:
+    store, worktrees, runner, passing_tests, _ = pipeline
+    runlog = MemoryRunLogger()
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+        runlog=runlog,
+    )
+    assert [kind for kind, _ in runlog.events] == ["task_start", "task_end"]
+    assert runlog.events[0][1] == {"task_id": "t-42", "level": 0}
+    assert runlog.events[1][1] == {"task_id": "t-42", "status": "review"}
+    del report
+
+
+def test_budget_gate_emits_start_and_failed_end(pipeline) -> None:
+    """Even a skipped dispatch leaves start/end traces in the JSONL log."""
+    store, worktrees, _, passing_tests, _ = pipeline
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=1))
+    budget.record(0, 1)
+    runlog = MemoryRunLogger()
+    run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=NeverRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        budget=budget,
+        runlog=runlog,
+    )
+    assert [kind for kind, _ in runlog.events] == ["task_start", "task_end"]
+    assert runlog.events[1][1] == {"task_id": "t-42", "status": "failed"}
+
+
 def test_parse_tokens_used_takes_last_marker() -> None:
     assert _parse_tokens_used("TOKENS_USED: 100\nall done", "") == 100
     assert _parse_tokens_used("TOKENS_USED: 5\nretry", "warning\nTOKENS_USED: 9") == 9
