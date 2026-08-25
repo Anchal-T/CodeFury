@@ -190,3 +190,62 @@ def test_full_hierarchy_epic_runs_and_dogfoods_memory(
 
     # 5. psutil tree hygiene: no live or zombie fake workers remain.
     assert leftover_worker_processes() == []
+
+
+def test_concurrency_soak_cap_holds_under_load_and_leaves_no_zombies(
+    tmp_path: Path, python_bin: str, git_init
+) -> None:
+    """Five workers against a cap of 2, each sleeping long enough to overlap:
+    the semaphore must hold (never >2 live fake workers), parallelism must be
+    real (>1 observed), and the run must reap its whole process tree."""
+    import threading
+
+    root = make_toy_repo(tmp_path, python_bin, git_init, max_workers=2)
+    samples: list[int] = []
+    stop = threading.Event()
+
+    def monitor(root_pid: int) -> None:
+        try:
+            parent = psutil.Process(root_pid)
+        except psutil.NoSuchProcess:
+            return
+        while not stop.is_set():
+            try:
+                count = 0
+                for child in parent.children(recursive=True):
+                    try:
+                        if any(
+                            "fake_worker.py" in part for part in (child.cmdline() or [])
+                        ):
+                            count += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                samples.append(count)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            time.sleep(0.05)
+
+    args = [python_bin, "-m", "orchestrator", "manage", "--goal", "soak run"]
+    args += [part for goal in (f"task {n}" for n in range(5)) for part in ("--sub-goal", goal)]
+    proc = subprocess.Popen(
+        args,
+        cwd=str(root),
+        env=orchestrator_env(FAKE_WORKER_SLEEP_S="1.0"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=False,
+    )
+    watcher = threading.Thread(target=monitor, args=(proc.pid,), daemon=True)
+    watcher.start()
+    out, err = proc.communicate(timeout=PROC_TIMEOUT_S)
+    stop.set()
+    watcher.join()
+
+    assert proc.returncode == 0, f"{err}\n{out}"
+    assert "final=review" in out
+    assert samples, "soak monitor collected no samples"
+    peak = max(samples)
+    assert peak <= 2, f"worker cap breached: {peak} concurrent workers"
+    assert peak >= 2, f"no parallelism observed (peak {peak}) — soak proves nothing"
+    assert leftover_worker_processes() == []
