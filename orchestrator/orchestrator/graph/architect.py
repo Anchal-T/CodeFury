@@ -64,6 +64,7 @@ def finalize_epic(
     knowledge: KnowledgeDocs,
     project_state: Path,
     runlog=None,
+    memory=None,
 ) -> Report | None:
     """Finalize the epic once every lead is resolved; None if not ready.
 
@@ -110,7 +111,15 @@ def finalize_epic(
         body_lines.append(f"- {lead.domain}: {lead.status} ({lead.id})")
     if blockers:
         body_lines.append("blockers: " + "; ".join(blockers))
-    knowledge.append_section(project_state, title=f"epic {epic.id}", body="\n".join(body_lines))
+    section_body = "\n".join(body_lines)
+    knowledge.append_section(project_state, title=f"epic {epic.id}", body=section_body)
+    if memory is not None:
+        memory.upsert(
+            section_body,
+            source="knowledge",
+            ref=f"{project_state}#epic {epic.id}",
+            title=f"epic {epic.id}",
+        )
     return report
 
 

@@ -20,6 +20,7 @@ from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
     from orchestrator.logging_setup import RunLogger
+    from orchestrator.memory.vector import VectorMemory
 
 #: Canonical blocker appended when the post-merge integration gate fails.
 #: Workers test in isolation, so individually passing branches can still
@@ -68,6 +69,7 @@ class OutcomeRecorder:
         integration: IntegrationGate | None = None,
         knowledge: KnowledgeDocs | None = None,
         runlog: "RunLogger | None" = None,
+        memory: "VectorMemory | None" = None,
     ) -> None:
         self.store = store
         self.agent_role = agent_role
@@ -75,6 +77,7 @@ class OutcomeRecorder:
         self.integration = integration
         self.knowledge = knowledge
         self.runlog = runlog
+        self.memory = memory
 
     def record(self, task: Task, request: RecordRequest) -> Report:
         ok = request.ok
@@ -117,4 +120,11 @@ class OutcomeRecorder:
                 title=request.knowledge_title,
                 body=request.knowledge_body,
             )
+            if self.memory is not None and request.knowledge_body.strip():
+                self.memory.upsert(
+                    request.knowledge_body,
+                    source="knowledge",
+                    ref=f"{request.knowledge_path}#{request.knowledge_title}",
+                    title=request.knowledge_title,
+                )
         return report

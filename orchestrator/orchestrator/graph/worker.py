@@ -24,6 +24,7 @@ from orchestrator.prompts import build_worker_prompt
 
 if TYPE_CHECKING:
     from orchestrator.logging_setup import RunLogger
+    from orchestrator.memory.vector import VectorMemory
 
 TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
@@ -111,6 +112,7 @@ def run_worker_task(
     knowledge_context: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
+    memory: "VectorMemory | None" = None,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
@@ -121,7 +123,8 @@ def run_worker_task(
     Phase 5) into the worker prompt. ``budget`` (Phase 6) gates the dispatch:
     an exhausted level budget short-circuits with a blocker Report before any
     worktree or subprocess exists. ``runlog`` receives task_start/task_end
-    events for the JSONL run log (Phase 6).
+    events for the JSONL run log (Phase 6). ``memory`` (Phase 7) indexes the
+    report summary into Tier-3 semantic memory.
     """
     task.status = "in_progress"
     store.save_task(task)
@@ -136,6 +139,7 @@ def run_worker_task(
             knowledge_context=knowledge_context,
             budget=budget,
             runlog=runlog,
+            memory=memory,
         )
     except Exception as exc:
         report = Report(
@@ -164,6 +168,7 @@ def _run_pipeline(
     knowledge_context: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
+    memory: "VectorMemory | None" = None,
 ) -> Report:
     if runlog is not None:
         runlog.event("task_start", task_id=task.id, level=task.level)
@@ -209,6 +214,13 @@ def _run_pipeline(
     store.save_task(task)
     if runlog is not None:
         runlog.event("task_end", task_id=task.id, status=task.status)
+    if memory is not None and report.summary.strip():
+        memory.upsert(
+            report.summary,
+            source="report",
+            ref=task.id,
+            title=f"worker:{task.id}",
+        )
     return report
 
 
@@ -225,6 +237,7 @@ def make_worker_node(
     domains_dir: Path | None = None,
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
+    memory: "VectorMemory | None" = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
@@ -241,7 +254,8 @@ def make_worker_node(
 
     ``budget`` (Phase 6) gates every dispatch at the pipeline choke point:
     an exhausted level budget yields an instant blocker Report instead of a
-    spawned worker. ``runlog`` receives task_start/task_end events.
+    spawned worker. ``runlog`` receives task_start/task_end events;
+    ``memory`` indexes each report summary into Tier-3 semantic search.
     """
     if max_workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {max_workers} (0 would deadlock)")
@@ -268,6 +282,7 @@ def make_worker_node(
                 knowledge_context=knowledge_context,
                 budget=budget,
                 runlog=runlog,
+                memory=memory,
             )
         return {
             "reports": [report.model_dump()],

@@ -68,6 +68,7 @@ def build_lead_graph(
     checkpointer=None,
     budget=None,
     runlog=None,
+    memory=None,
 ):
     """Assemble and compile Architect-less lead → managers → workers graph.
 
@@ -97,6 +98,7 @@ def build_lead_graph(
         domains_dir=domains_dir,
         budget=budget,
         runlog=runlog,
+        memory=memory,
     )
     reconcile_worker = make_worker_node(
         store=store,
@@ -110,6 +112,7 @@ def build_lead_graph(
         domains_dir=domains_dir,
         budget=budget,
         runlog=runlog,
+        memory=memory,
     )
 
     recorder = OutcomeRecorder(
@@ -120,6 +123,7 @@ def build_lead_graph(
         ),
         knowledge=knowledge,
         runlog=runlog,
+        memory=memory,
     )
 
     def _finalize(

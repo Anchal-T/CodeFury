@@ -22,6 +22,7 @@ from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
     from orchestrator.logging_setup import RunLogger
+    from orchestrator.memory.vector import VectorMemory
 
 
 @dataclass
@@ -110,6 +111,7 @@ def finalize_parent(
     repo_root: Path | None = None,
     test_command: list[str] | None = None,
     runlog: "RunLogger | None" = None,
+    memory: "VectorMemory | None" = None,
 ) -> Report:
     """Persist the parent task's final status and its aggregate Report.
 
@@ -126,6 +128,7 @@ def finalize_parent(
             else None
         ),
         runlog=runlog,
+        memory=memory,
     )
     return recorder.record(
         parent,
