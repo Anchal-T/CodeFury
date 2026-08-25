@@ -15,10 +15,10 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/domains/` — Tier-1 knowledge docs maintained by leads/architect (gitignored at runtime).
 - `orchestrator/logs/` — JSONL run logs, one run_<ts>.jsonl per invocation (gitignored).
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
-- `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv).
+- `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv, fastembed, numpy).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs/recall/reindex); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; recall/reindex expose Tier-3 semantic memory; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
 - `orchestrator/orchestrator/cli_status.py` — read-only CLI helpers: task-tree renderer (orphan-safe, token display) and JSONL tailing (newest-run pick, last-N print, partial-line-safe follow loop).
 - `orchestrator/tests/test_cli_status.py` — tree rendering, newest-file selection, tail printing, follow-loop partial-line holdback tests.
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
@@ -35,7 +35,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer/DomainDecomposer/EpicDecomposer protocols with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
 - `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): TOKENS_USED attribution, budget-gated dispatch, task_start/task_end events, async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
-- `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, and Tier-1 knowledge + checkpoint wiring.
+- `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, Tier-1 knowledge + semantic-recall planning seam + checkpoint wiring.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
@@ -43,11 +43,12 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree lifecycle tests against a temp git repo, incl. typed merge-conflict errors.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
-- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage, typed round-trips, parent/status queries, token_usage writers/readers + all_tasks/latest_tokens_by_task for the CLI; open_checkpointer() shares this one connection.
+- `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage/vector_entries, typed round-trips, parent/status queries, token_usage writers/readers + all_tasks/latest_tokens_by_task/latest_reports for the CLI; open_checkpointer() shares this one connection.
 - `orchestrator/orchestrator/memory/checkpointer.py` — async LangGraph checkpointer facade over sync SqliteSaver on StateStore's single connection.
 - `orchestrator/tests/memory/test_store.py` — schema, WAL mode, round-trip and thread-safety tests.
-- `orchestrator/orchestrator/memory/vector.py` — optional Tier-3 fastembed+numpy semantic search.
-- `orchestrator/orchestrator/memory/knowledge_docs.py` — Tier-1 markdown knowledge docs: read_latest + append-only UTC-timestamped sections.
+- `orchestrator/orchestrator/memory/vector.py` — Tier-3 semantic memory (Phase 7): VectorMemory upsert/search over SQLite BLOB embeddings, numpy cosine ranking, lazy fastembed embedder, auto_memory detection with ORCHESTRATOR_SEMANTIC kill-switch, recall_context planning seam.
+- `orchestrator/tests/memory/test_vector.py` — vector tests: blob codec, zero-norm-safe cosine, ranking/top-k/dim filter, lazy model load, seam helpers; real-model search behind the slow marker.
+- `orchestrator/orchestrator/memory/knowledge_docs.py` — Tier-1 markdown knowledge docs: read_latest + append-only UTC-timestamped sections + parse_sections for Tier-3 indexing.
 - `orchestrator/tests/memory/test_knowledge_docs.py` — knowledge docs tests: missing-file reads, timestamped appends, history preservation.
 - `orchestrator/orchestrator/governance/__init__.py` — package marker for governance.
 - `orchestrator/orchestrator/governance/budget.py` — BudgetTracker: per-level token counters in token_usage, caps from config, BUDGET_EXHAUSTED_PREFIX blocker convention (exhausted budget = blocker, not hang).
