@@ -19,6 +19,7 @@ import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Callable, TypeVar
 
@@ -28,6 +29,19 @@ from orchestrator.contracts import Report, Task
 from orchestrator.memory.checkpointer import SharedConnectionCheckpointer
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class VectorRow:
+    """One Tier-3 memory entry; ``embedding`` is an opaque BLOB here —
+    encoding/decoding is VectorMemory's business (plan §3.5)."""
+
+    source: str
+    ref: str
+    title: str
+    body: str
+    dim: int
+    embedding: bytes
 
 
 def _is_lock_error(exc: sqlite3.OperationalError) -> bool:
@@ -90,6 +104,17 @@ CREATE TABLE IF NOT EXISTS token_usage (
     level      INTEGER NOT NULL,
     tokens     INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS vector_entries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    source     TEXT NOT NULL,
+    ref        TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL DEFAULT '',
+    dim        INTEGER NOT NULL,
+    embedding  BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source, ref)
 );
 """
 
@@ -282,6 +307,44 @@ class StateStore:
         for row in rows:
             tokens[row["task_id"]] = int(row["tokens_used"])
         return tokens
+
+    # -- vector entries (Tier-3 semantic memory) ------------------------------
+
+    def upsert_vector_entry(
+        self, *, source: str, ref: str, title: str, body: str,
+        dim: int, embedding: bytes,
+    ) -> None:
+        """Idempotent by (source, ref): resumes and retries replace, never
+        duplicate (plan §3.5)."""
+        with self._lock:
+
+            def _upsert() -> None:
+                self.connection().execute(
+                    "INSERT OR REPLACE INTO vector_entries"
+                    " (source, ref, title, body, dim, embedding)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (source, ref, title, body, dim, sqlite3.Binary(embedding)),
+                )
+                self.connection().commit()
+
+            _with_lock_retry(_upsert)
+
+    def vector_rows(self, dim: int | None = None) -> list[VectorRow]:
+        """All entries in insertion order; ``dim`` filters mixed-dim rows out."""
+        query = "SELECT source, ref, title, body, dim, embedding FROM vector_entries"
+        params: tuple = ()
+        if dim is not None:
+            query += " WHERE dim = ?"
+            params = (dim,)
+        with self._lock:
+            rows = self.connection().execute(query + " ORDER BY id", params).fetchall()
+        return [
+            VectorRow(
+                source=row["source"], ref=row["ref"], title=row["title"],
+                body=row["body"], dim=int(row["dim"]), embedding=bytes(row["embedding"]),
+            )
+            for row in rows
+        ]
 
     # -- introspection -----------------------------------------------------
 

@@ -10,7 +10,7 @@ from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 
 from orchestrator.contracts import Report, Task
-from orchestrator.memory.store import StateStore
+from orchestrator.memory.store import StateStore, VectorRow
 
 
 def make_task(task_id: str = "t1", status: str = "pending") -> Task:
@@ -49,7 +49,9 @@ def store(tmp_path: Path) -> StateStore:
 def test_init_schema_creates_all_tables(store: StateStore) -> None:
     # The legacy stub `checkpoints` table is gone in Phase 5; SqliteSaver owns
     # its own checkpoints/writes tables, created lazily on first use.
-    assert set(store.table_names()) == {"tasks", "reports", "agents", "token_usage"}
+    assert set(store.table_names()) == {
+        "tasks", "reports", "agents", "token_usage", "vector_entries",
+    }
 
 
 def test_init_schema_drops_legacy_stub_checkpoints_table(tmp_path: Path) -> None:
@@ -373,3 +375,51 @@ def test_latest_tokens_by_task_takes_last_report(store: StateStore) -> None:
     store.save_report(make_report("t1").model_copy(update={"tokens_used": 20}))
 
     assert store.latest_tokens_by_task() == {"t1": 20, "t2": 30}
+
+
+# -- vector entries (Tier-3 semantic memory) ----------------------------------
+
+
+def upsert_entry(store: StateStore, ref: str = "d.md", dim: int = 2, body: str = "b") -> None:
+    store.upsert_vector_entry(
+        source="knowledge",
+        ref=ref,
+        title=f"title {ref}",
+        body=body,
+        dim=dim,
+        embedding=bytes([1]) * dim,
+    )
+
+
+def test_vector_row_round_trip(store: StateStore) -> None:
+    store.upsert_vector_entry(
+        source="report", ref="w-1", title="worker:w-1", body="did things",
+        dim=4, embedding=b"\x00\x01\x02\x03",
+    )
+    rows = store.vector_rows()
+    assert rows == [
+        VectorRow(source="report", ref="w-1", title="worker:w-1", body="did things",
+                  dim=4, embedding=b"\x00\x01\x02\x03")
+    ]
+
+
+def test_upsert_same_source_ref_replaces(store: StateStore) -> None:
+    """Resume/retry must not duplicate entries — (source, ref) is the key."""
+    upsert_entry(store, ref="d.md", body="old")
+    upsert_entry(store, ref="d.md", body="new")
+    rows = store.vector_rows()
+    assert len(rows) == 1
+    assert rows[0].body == "new"
+
+
+def test_vector_rows_filter_by_dim(store: StateStore) -> None:
+    """Mixed-dim histories never reach the ranking math."""
+    upsert_entry(store, ref="a.md", dim=2)
+    upsert_entry(store, ref="b.md", dim=4)
+    assert [r.ref for r in store.vector_rows(dim=2)] == ["a.md"]
+    assert [r.ref for r in store.vector_rows(dim=4)] == ["b.md"]
+    assert len(store.vector_rows()) == 2
+
+
+def test_vector_rows_empty_store(store: StateStore) -> None:
+    assert store.vector_rows() == []
