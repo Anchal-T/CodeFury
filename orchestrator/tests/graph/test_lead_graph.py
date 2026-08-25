@@ -9,6 +9,7 @@ the domain repo_map.md.
 import asyncio
 import os
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -239,11 +240,14 @@ def test_lead_passes_latest_repo_map_to_decomposer(
 
 
 class FakeVectorMemory:
-    """Seeded VectorMemory stand-in with the same upsert/search surface."""
+    """Seeded VectorMemory stand-in with the same upsert/search/store surface."""
 
     def __init__(self, entries: list[tuple[str, str, str]]) -> None:
         self._entries = entries  # (title, body, ref)
         self.upserts: list[tuple[str, dict]] = []
+        self.store = types.SimpleNamespace(
+            vector_rows=lambda dim=None: [object()] * len(self._entries)
+        )
 
     def search(self, query: str, *, top_k: int = 5) -> list[dict]:
         return [
