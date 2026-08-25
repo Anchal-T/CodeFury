@@ -70,7 +70,8 @@ def make_lead(domain: str = "backend") -> Task:
 
 
 def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
-          max_reconcile_attempts=1, max_workers=2, checkpointer=None, runner=None):
+          max_reconcile_attempts=1, max_workers=2, checkpointer=None, runner=None,
+          memory=None):
     return build_lead_graph(
         store=store,
         worktrees=WorktreeManager(git_repo, git_repo / "workspaces"),
@@ -82,6 +83,7 @@ def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
         knowledge=KnowledgeDocs(),
         domains_dir=domains_dir,
         checkpointer=checkpointer,
+        memory=memory,
     )
 
 
@@ -234,6 +236,51 @@ def test_lead_passes_latest_repo_map_to_decomposer(
 
     assert result["outcome"] == "failed", "empty decomposition fails fast"
     assert capturing.contexts and "PLANNING MARKER LMN" in capturing.contexts[0]
+
+
+class FakeVectorMemory:
+    """Seeded VectorMemory stand-in with the same upsert/search surface."""
+
+    def __init__(self, entries: list[tuple[str, str, str]]) -> None:
+        self._entries = entries  # (title, body, ref)
+        self.upserts: list[tuple[str, dict]] = []
+
+    def search(self, query: str, *, top_k: int = 5) -> list[dict]:
+        return [
+            {"score": 0.8 - n * 0.1, "source": "knowledge", "ref": ref,
+             "title": title, "body": body}
+            for n, (title, body, ref) in enumerate(self._entries[:top_k])
+        ]
+
+    def upsert(self, text: str, **metadata: object) -> None:
+        self.upserts.append((text, dict(metadata)))
+
+
+def test_lead_planning_context_includes_semantic_recall(
+    git_repo: Path, store: StateStore, python_bin: str, domains_dir: Path
+) -> None:
+    """Tier-3 seam (Phase 7): recalled history supplements the markdown
+    context handed to the DomainDecomposer."""
+    KnowledgeDocs().append_section(
+        domains_dir / "backend" / "repo_map.md",
+        title="seed",
+        body="MARKDOWN PRIMARY",
+    )
+    capturing = ContextCapturingDecomposer()
+    memory = FakeVectorMemory([
+        ("reconciliation policy", "one reconciler per conflict", "d.md#r"),
+    ])
+    graph = build(store, git_repo, python_bin, capturing,
+                  domains_dir=domains_dir, memory=memory)
+
+    asyncio.run(
+        asyncio.wait_for(graph.ainvoke({"lead_task": make_lead().model_dump()}), GRAPH_TIMEOUT_S)
+    )
+
+    context = capturing.contexts[0]
+    assert "MARKDOWN PRIMARY" in context, "markdown stays primary"
+    assert "Relevant history" in context
+    assert "reconciliation policy" in context
 
 
 class RecordingNoopRunner:

@@ -118,3 +118,61 @@ class FastEmbedder:
             return []
         model = self._load()
         return [np.asarray(vec, dtype=_DTYPE) for vec in model.embed(texts)]
+
+
+#: Operator/test kill-switch: ``0`` forces Tier-3 off even when fastembed is
+#: installed (keeps test suites hermetic and gives ops a clean escape hatch).
+_SEMANTIC_ENV_VAR = "ORCHESTRATOR_SEMANTIC"
+
+#: Cap on each recalled entry's length inside a planning-context block.
+_SNIPPET_MAX_CHARS = 200
+
+
+def auto_memory(store) -> "VectorMemory | None":
+    """Construct a VectorMemory iff Tier-3 is available and not switched off.
+
+    Returns None (silently) when fastembed is missing or
+    ORCHESTRATOR_SEMANTIC=0 — callers treat None as 'no vectors', keeping the
+    run fully functional on markdown alone (plan §3.5 cheapest-first).
+    """
+    import os
+
+    if os.environ.get(_SEMANTIC_ENV_VAR) == "0":
+        return None
+    try:
+        import fastembed  # noqa: F401
+    except ImportError:
+        return None
+    return VectorMemory(store)
+
+
+def format_history_block(hits: list[dict]) -> str:
+    """Render search hits as an appendable 'Relevant history' block."""
+    if not hits:
+        return ""
+    lines = ["Relevant history (semantic recall, best first):"]
+    for hit in hits:
+        label = hit.get("title") or hit.get("ref", "")
+        snippet = " ".join(str(hit.get("body", "")).split())
+        if len(snippet) > _SNIPPET_MAX_CHARS:
+            snippet = snippet[: _SNIPPET_MAX_CHARS - 3] + "..."
+        lines.append(f"- {label} (score {hit['score']:.2f}): {snippet}")
+    return "\n".join(lines)
+
+
+def recall_context(memory: "VectorMemory | None", goal: str, *, top_k: int = 3) -> str:
+    """Top-k relevant history for a planning goal, formatted; '' when none.
+
+    Fail-soft by design: an empty vector store short-circuits before any
+    model load, and an embedder failure must never break planning — markdown
+    stays primary (plan §3.5).
+    """
+    if memory is None or not goal.strip():
+        return ""
+    try:
+        if not memory.store.vector_rows():
+            return ""
+        hits = memory.search(goal, top_k=top_k)
+    except Exception:  # noqa: BLE001 — Tier-3 is strictly additive
+        return ""
+    return format_history_block(hits)

@@ -17,7 +17,10 @@ from orchestrator.memory.vector import (
     VectorMemory,
     _from_blob,
     _to_blob,
+    auto_memory,
     cosine_top_k,
+    format_history_block,
+    recall_context,
 )
 
 
@@ -182,6 +185,88 @@ def test_fastembedder_loads_model_lazily_and_once(monkeypatch: pytest.MonkeyPatc
 
     assert created == [FastEmbedder.DEFAULT_MODEL_NAME]
     assert len(first) == len(second) == 1
+
+
+# -- retrieval seam helpers ----------------------------------------------------
+
+
+def test_format_history_block_renders_titles_scores_snippets() -> None:
+    block = format_history_block(
+        [
+            {"title": "reconciliation policy", "ref": "d.md", "score": 0.61,
+             "body": "Lead dispatches one\nreconciliation worker per conflict."},
+            {"title": "", "ref": "w-9", "score": 0.10, "body": "short"},
+        ]
+    )
+    lines = block.splitlines()
+    assert lines[0].startswith("Relevant history")
+    assert "reconciliation policy (score 0.61)" in lines[1]
+    assert "reconciliation worker per conflict" in lines[1]
+    assert "w-9 (score 0.10): short" in lines[2]
+
+
+def test_format_history_block_truncates_long_bodies() -> None:
+    block = format_history_block(
+        [{"title": "t", "ref": "r", "score": 0.5, "body": "x" * 500}]
+    )
+    snippet_line = block.splitlines()[1]
+    assert len(snippet_line) < 300
+    assert snippet_line.endswith("...")
+
+
+def test_format_history_block_empty_hits_is_empty_string() -> None:
+    assert format_history_block([]) == ""
+
+
+def test_recall_context_none_memory_or_empty_store_is_empty(store: StateStore) -> None:
+    assert recall_context(None, "any goal") == ""
+    memory = make_memory(store, {})
+    assert recall_context(memory, "any goal") == "", (
+        "empty vector store must short-circuit before any model load"
+    )
+
+
+def test_recall_context_formats_seeded_history(store: StateStore) -> None:
+    memory = make_memory(store, {"decision text": [1.0, 0.0]})
+    memory.upsert("decision text", source="knowledge", ref="d.md", title="the decision")
+
+    block = recall_context(memory, "decision text", top_k=2)
+
+    assert block.startswith("Relevant history")
+    assert "the decision" in block
+
+
+def test_recall_context_survives_embedder_failure(store: StateStore) -> None:
+    """Tier-3 is strictly additive — a broken embedder must not break planning."""
+
+    class ExplodingEmbedder:
+        def embed(self, texts):
+            raise RuntimeError("model download failed")
+
+        # store attribute accessed before embed; reuse the real one
+
+    memory = make_memory(store, {"decision text": [1.0, 0.0]})
+    memory.upsert("decision text", source="knowledge", ref="d.md", title="t")
+    memory.embedder = ExplodingEmbedder()
+
+    assert recall_context(memory, "decision text") == ""
+
+
+def test_auto_memory_disabled_by_kill_switch(store: StateStore, monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_SEMANTIC", "0")
+    assert auto_memory(store) is None
+
+
+def test_auto_memory_enabled_when_fastembed_importable(store: StateStore, monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_SEMANTIC", raising=False)
+    memory = auto_memory(store)
+    assert isinstance(memory, VectorMemory)
+
+
+def test_auto_memory_silently_off_without_fastembed(store: StateStore, monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_SEMANTIC", raising=False)
+    monkeypatch.setitem(sys.modules, "fastembed", None)  # import → ImportError
+    assert auto_memory(store) is None
 
 
 @pytest.mark.slow

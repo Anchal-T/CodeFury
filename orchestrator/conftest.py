@@ -20,6 +20,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _no_semantic_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Tier-3 semantic memory out of the default suite: indexing/recall
+    would load the real ONNX model. Slow-marked tests opt back in by deleting
+    the variable (mirrors how ambient env is handled for ZCODE_CMD)."""
+    monkeypatch.setenv("ORCHESTRATOR_SEMANTIC", "0")
+
+
 @pytest.fixture(scope="session")
 def python_bin() -> str:
     """Return a python executable that runs ``-c`` snippets reliably."""
