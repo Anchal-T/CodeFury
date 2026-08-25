@@ -12,6 +12,31 @@ from pathlib import Path
 
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
+#: Heading marker that starts a knowledge section.
+_HEADING = "## "
+
+
+def parse_sections(text: str) -> list[tuple[str, str]]:
+    """Split a knowledge doc into (heading, body) sections (Phase 7).
+
+    Everything before the first ``## `` heading is a preamble and ignored;
+    each section's body runs until the next heading or end of document.
+    """
+    sections: list[tuple[str, str]] = []
+    title: str | None = None
+    body_lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith(_HEADING):
+            if title is not None:
+                sections.append((title, "\n".join(body_lines).strip()))
+            title = line[len(_HEADING):].strip()
+            body_lines = []
+        elif title is not None:
+            body_lines.append(line)
+    if title is not None:
+        sections.append((title, "\n".join(body_lines).strip()))
+    return sections
+
 
 class KnowledgeDocs:
     """Reads and appends to markdown knowledge documents."""

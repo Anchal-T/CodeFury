@@ -423,3 +423,14 @@ def test_vector_rows_filter_by_dim(store: StateStore) -> None:
 
 def test_vector_rows_empty_store(store: StateStore) -> None:
     assert store.vector_rows() == []
+
+
+def test_latest_reports_returns_last_report_per_task(store: StateStore) -> None:
+    """reindex uses this to seed Tier-3 with each task's final summary."""
+    store.save_report(make_report("t1").model_copy(update={"summary": "old"}))
+    store.save_report(make_report("t2").model_copy(update={"summary": "only"}))
+    store.save_report(make_report("t1").model_copy(update={"summary": "new"}))
+
+    reports = store.latest_reports()
+    summaries = {r.task_id: r.summary for r in reports}
+    assert summaries == {"t1": "new", "t2": "only"}

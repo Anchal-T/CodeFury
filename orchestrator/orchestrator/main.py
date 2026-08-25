@@ -40,8 +40,9 @@ from orchestrator.graph.decompose import (
 from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.graph.worker import run_worker_task
 from orchestrator.logging_setup import RunLogger, setup_logging
-from orchestrator.memory.knowledge_docs import KnowledgeDocs
+from orchestrator.memory.knowledge_docs import KnowledgeDocs, parse_sections
 from orchestrator.memory.store import StateStore
+from orchestrator.memory.vector import auto_memory, recall_context
 
 
 @click.group()
@@ -342,6 +343,96 @@ def logs(tail: str | None, config_path: Path) -> None:
         follow_file(latest, pos, out, interval_s=_FOLLOW_INTERVAL_S)
     except KeyboardInterrupt:
         pass
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--top-k", default=5, show_default=True, help="Maximum hits to show.")
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def recall(query: str, top_k: int, config_path: Path) -> None:
+    """Search Tier-3 semantic memory with a natural-language query."""
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    db = base / config.paths.db
+    if not db.exists():
+        raise click.ClickException(
+            f"no database at {db} — run something first, or seed with `orchestrator reindex`"
+        )
+    with StateStore(db) as store:
+        store.init_schema()
+        memory = auto_memory(store)
+        if memory is None:
+            raise click.ClickException(
+                "Tier-3 unavailable — install fastembed (pip install fastembed)"
+                " and make sure ORCHESTRATOR_SEMANTIC is not set to 0"
+            )
+        hits = memory.search(query, top_k=top_k)
+    if not hits:
+        click.echo(f"[recall] no entries match {query!r} — seed with `orchestrator reindex`")
+        return
+    for hit in hits:
+        label = hit["title"] or hit["ref"]
+        click.echo(f"{hit['score']:.3f}  [{hit['source']}] {label}")
+        snippet = " ".join(str(hit["body"]).split())
+        if snippet:
+            click.echo(f"      {snippet}")
+
+
+@cli.command()
+@click.option(
+    "--config",
+    "config_path",
+    default="config.yaml",
+    type=click.Path(path_type=Path),
+    help="Path to config.yaml.",
+)
+def reindex(config_path: Path) -> None:
+    """(Re)index knowledge docs and report summaries into Tier-3 memory.
+
+    Idempotent: entries are keyed by (source, ref), so re-running replaces
+    instead of duplicating.
+    """
+    config = load_config(config_path)
+    base = config_path.resolve().parent
+    db = base / config.paths.db
+    domains_dir = base / config.paths.domains
+    if not db.exists():
+        raise click.ClickException(f"no database at {db}")
+    indexed = 0
+    with StateStore(db) as store:
+        store.init_schema()
+        memory = auto_memory(store)
+        if memory is None:
+            raise click.ClickException(
+                "Tier-3 unavailable — install fastembed (pip install fastembed)"
+                " and make sure ORCHESTRATOR_SEMANTIC is not set to 0"
+            )
+        knowledge = KnowledgeDocs()
+        for doc in sorted(domains_dir.rglob("*.md")) if domains_dir.is_dir() else []:
+            text = knowledge.read_latest(doc)
+            for title, body in parse_sections(text):
+                if not body.strip():
+                    continue
+                memory.upsert(body, source="knowledge", ref=f"{doc}#{title}", title=title)
+                indexed += 1
+        for report in store.latest_reports():
+            summary = report.summary.strip()
+            if not summary:
+                continue
+            memory.upsert(
+                summary,
+                source="report",
+                ref=report.task_id,
+                title=report.agent,
+            )
+            indexed += 1
+    click.echo(f"[reindex] {indexed} entr{'y' if indexed == 1 else 'ies'} indexed into Tier-3 memory")
 
 
 if __name__ == "__main__":

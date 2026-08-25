@@ -264,6 +264,18 @@ class StateStore:
             ).fetchone()
         return Report.model_validate_json(row["payload"]) if row else None
 
+    def latest_reports(self) -> list[Report]:
+        """Latest report per task id — reindex seeds Tier-3 from these."""
+        with self._lock:
+            rows = self.connection().execute(
+                "SELECT payload FROM reports ORDER BY id"
+            ).fetchall()
+        latest: dict[str, Report] = {}
+        for row in rows:
+            report = Report.model_validate_json(row["payload"])
+            latest[report.task_id] = report
+        return list(latest.values())
+
     # -- token usage ---------------------------------------------------------
 
     def add_token_usage(self, level: int, tokens: int) -> None:
