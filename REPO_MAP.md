@@ -17,6 +17,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, python-dotenv, fastembed, numpy).
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
+- `orchestrator/scripts/token_report.py` — per-level token burn report from a run database (Phase 8 budget tuning; dev utility).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
 - `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs/recall/reindex); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; recall/reindex expose Tier-3 semantic memory; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
 - `orchestrator/orchestrator/cli_status.py` — read-only CLI helpers: task-tree renderer (orphan-safe, token display) and JSONL tailing (newest-run pick, last-N print, partial-line-safe follow loop).
@@ -67,12 +68,16 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/test_fake_worker.py` — fake worker script behavior incl. failure mode and TOKENS_USED reporting.
 - `orchestrator/tests/governance/test_retry_policy.py` — retry/escalation cap boundary tests.
 - `orchestrator/tests/governance/test_budget.py` — BudgetTracker tests: per-level accumulation, cap math, uncapped levels, blocker message contract.
+- `orchestrator/tests/test_token_report.py` — token report utility tests: per-level table, empty/missing databases.
 - `orchestrator/tests/test_logging_setup.py` — RunLogger tests: timestamped file, JSON line format, ordering, thread-safety, idempotent close.
+- `orchestrator/tests/test_cross_platform_audit.py` — suite-enforced portability audit (plan §7): no shell spawns/string commands/os.path, psutil-only kills, lightweight deps.
 - `orchestrator/tests/graph/test_worker.py` — Phase 1 pipeline tests (incl. TOKENS_USED parsing, budget-gated dispatch, JSONL events) + async worker node and semaphore cap tests.
 - `orchestrator/tests/graph/test_decompose.py` — StaticDecomposer and StaticDomainDecomposer child-task tests.
 - `orchestrator/tests/graph/test_lead_graph.py` — lead graph E2E: clean managers, conflict→reconciliation, escalation, empty decomposition.
 - `orchestrator/tests/graph/test_state.py` — state reducer tests (append lists, max-merge attempts).
 - `orchestrator/tests/graph/test_manager.py` — manager review tests: merge, retry, conflict, finalization.
+- `orchestrator/tests/graph/test_level_graph.py` — LevelGraph lifecycle tests: empty decomposition, retry caps, dispatch dedupe via the shared skeleton.
+- `orchestrator/tests/e2e/test_epic_end_to_end.py` — Phase 8 end-to-end: full Architect→Lead→Manager→Worker hierarchy via real CLI, plus concurrency soak and zombie hygiene.
 - `orchestrator/tests/graph/test_build_graph.py` — end-to-end graph tests: fan-out merge, retry-cap termination, empty decomposition, manager_results contract.
 - `orchestrator/orchestrator/graph/level_graph.py` — deep lifecycle module: plan/dispatch/review/finalize skeleton, RoundDecision + DispatchSpec routing, attempt counting; state schemas stay caller-owned (ADR 0001).
 - `orchestrator/orchestrator/graph/outcome_recorder.py` — shared finalization: terminal status, aggregate Report, integration gate, knowledge-doc append (INTEGRATION_FAILED_BLOCKER).
