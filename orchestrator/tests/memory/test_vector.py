@@ -32,7 +32,7 @@ def test_cosine_ranks_identical_first() -> None:
 
 def test_cosine_top_k_limits_results() -> None:
     query = np.asarray([1.0, 0.0], dtype=np.float32)
-    matrix = np.eye(5, dtype=np.float32)  # every row identical to the query
+    matrix = np.tile(np.asarray([1.0, 0.0], dtype=np.float32), (5, 1))
     scores, indices = cosine_top_k(query, matrix, top_k=2)
     assert len(scores) == len(indices) == 2
 
