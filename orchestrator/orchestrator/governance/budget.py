@@ -12,6 +12,10 @@ lesson from Phase 2.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from threading import RLock
+from typing import Iterator
+
 from orchestrator.config import BudgetsConfig
 from orchestrator.memory.store import StateStore
 
@@ -34,6 +38,7 @@ class BudgetTracker:
     def __init__(self, store: StateStore, budgets: BudgetsConfig) -> None:
         self.store = store
         self.budgets = budgets
+        self._dispatch_lock = RLock()
 
     def _cap(self, level: int) -> int | None:
         try:
@@ -44,8 +49,23 @@ class BudgetTracker:
 
     def record(self, level: int, tokens: int) -> None:
         """Attribute real spend to a level; zero-token runs add no row."""
-        if tokens:
-            self.store.add_token_usage(level, tokens)
+        with self._dispatch_lock:
+            if tokens:
+                self.store.add_token_usage(level, tokens)
+
+    @contextmanager
+    def dispatch(self, level: int) -> Iterator[bool]:
+        """Serialize capped dispatches around their usage accounting.
+
+        Token usage is reported only after a worker exits, so the gate and the
+        subsequent record must not be separated across concurrent workers.
+        Uncapped levels retain their normal parallel behavior.
+        """
+        if self._cap(level) is None:
+            yield True
+            return
+        with self._dispatch_lock:
+            yield not self.exceeded(level)
 
     def remaining(self, level: int) -> int | None:
         """Tokens left before the cap; ``None`` when the level is uncapped."""

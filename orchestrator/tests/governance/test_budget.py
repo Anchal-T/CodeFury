@@ -1,5 +1,7 @@
 """Tests for orchestrator.governance.budget (per-level token caps)."""
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -84,3 +86,40 @@ def test_blocker_message_carries_level_role_used_and_cap(store: StateStore) -> N
 def test_blocker_prefix_is_the_review_contract() -> None:
     """review_reports keys no-retry behavior off this exact prefix."""
     assert BUDGET_EXHAUSTED_PREFIX == "token budget exhausted"
+
+
+def test_capped_dispatches_are_serialized_through_usage_recording(
+    store: StateStore,
+) -> None:
+    """A second worker cannot pass the gate before the first reports spend."""
+    tracker = make_tracker(store, worker_tokens=10)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    second_allowed: list[bool] = []
+
+    def first() -> None:
+        with tracker.dispatch(0) as allowed:
+            assert allowed
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+            tracker.record(0, 10)
+
+    def second() -> None:
+        assert first_entered.wait(timeout=2)
+        with tracker.dispatch(0) as allowed:
+            second_allowed.append(allowed)
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first)
+    second_thread = threading.Thread(target=second)
+    first_thread.start()
+    second_thread.start()
+    assert first_entered.wait(timeout=2)
+    time.sleep(0.05)
+    assert not second_entered.is_set()
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert second_allowed == [False]

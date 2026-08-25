@@ -13,6 +13,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 
 def _utc_now() -> datetime:
@@ -50,5 +51,6 @@ class RunLogger:
 
 def setup_logging(logs_dir: Path) -> RunLogger:
     """Open this run's log file: <logs_dir>/run_<UTC timestamp>.jsonl."""
-    stamp = _utc_now().strftime("%Y%m%dT%H%M%SZ")
-    return RunLogger(logs_dir / f"run_{stamp}.jsonl")
+    stamp = _utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+    unique_id = uuid4().hex[:8]
+    return RunLogger(logs_dir / f"run_{stamp}_{unique_id}.jsonl")

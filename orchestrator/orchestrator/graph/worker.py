@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 import subprocess
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -173,56 +174,57 @@ def _run_pipeline(
     if runlog is not None:
         runlog.event("task_start", task_id=task.id, level=task.level)
 
-    if budget is not None and budget.exceeded(task.level):
+    dispatch = budget.dispatch(task.level) if budget is not None else nullcontext(True)
+    with dispatch as allowed:
+        if not allowed:
+            report = Report(
+                task_id=task.id,
+                agent=f"worker:{task.id}",
+                summary="skipped: level token budget exhausted",
+                diff_ref=None,
+                tests_passed=False,
+                tokens_used=0,
+                blockers=[budget.blocker(task.level)],  # type: ignore[union-attr]
+            )
+            store.save_report(report)
+            task.status = "failed"
+            store.save_task(task)
+            if runlog is not None:
+                runlog.event("task_end", task_id=task.id, status=task.status)
+            return report
+
+        worktree = worktrees.create(task.id)
+        result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
+        tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
+        worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
+
+        tokens_used = _parse_tokens_used(result.stdout, result.stderr)
+        if budget is not None:
+            budget.record(task.level, tokens_used)
+
+        blockers = _blockers(result, tests, worktree)
         report = Report(
             task_id=task.id,
             agent=f"worker:{task.id}",
-            summary="skipped: level token budget exhausted",
-            diff_ref=None,
-            tests_passed=False,
-            tokens_used=0,
-            blockers=[budget.blocker(task.level)],
+            summary=_summarize(result, tests),
+            diff_ref=worktrees.branch_name(task.id),
+            tests_passed=tests.passed and not blockers,
+            tokens_used=tokens_used,
+            blockers=blockers,
         )
         store.save_report(report)
-        task.status = "failed"
+        task.status = "failed" if blockers else "review"
         store.save_task(task)
         if runlog is not None:
             runlog.event("task_end", task_id=task.id, status=task.status)
+        if memory is not None and report.summary.strip():
+            memory.upsert(
+                report.summary,
+                source="report",
+                ref=task.id,
+                title=f"worker:{task.id}",
+            )
         return report
-
-    worktree = worktrees.create(task.id)
-    result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
-    tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
-    worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
-
-    tokens_used = _parse_tokens_used(result.stdout, result.stderr)
-    if budget is not None:
-        budget.record(task.level, tokens_used)
-
-    blockers = _blockers(result, tests, worktree)
-    report = Report(
-        task_id=task.id,
-        agent=f"worker:{task.id}",
-        summary=_summarize(result, tests),
-        diff_ref=worktrees.branch_name(task.id),
-        tests_passed=tests.passed and not blockers,
-        tokens_used=tokens_used,
-        blockers=blockers,
-    )
-    store.save_report(report)
-    task.status = "failed" if blockers else "review"
-    store.save_task(task)
-    if runlog is not None:
-        runlog.event("task_end", task_id=task.id, status=task.status)
-    if memory is not None and report.summary.strip():
-        memory.upsert(
-            report.summary,
-            source="report",
-            ref=task.id,
-            title=f"worker:{task.id}",
-        )
-    return report
-
 
 def make_worker_node(
     *,
