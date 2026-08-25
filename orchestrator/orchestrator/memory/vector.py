@@ -47,10 +47,74 @@ def cosine_top_k(
 
 
 class VectorMemory:
-    """Embeds and searches memory entries with numpy cosine similarity."""
+    """Embeds and searches memory entries with numpy cosine similarity.
 
-    def upsert(self, text: str, metadata: dict) -> None:
-        raise NotImplementedError("Phase 7")
+    Entries live in StateStore's ``vector_entries`` table (same SQLite file,
+    BLOB embeddings); the embedder is injectable — tests use deterministic
+    fakes, production uses a lazily-loaded fastembed ONNX model.
+    """
 
-    def search(self, query: str, top_k: int) -> list[dict]:
-        raise NotImplementedError("Phase 7")
+    def __init__(self, store, embedder: "FastEmbedder | None" = None) -> None:
+        self.store = store
+        self.embedder = embedder if embedder is not None else FastEmbedder()
+
+    def upsert(self, text: str, *, source: str, ref: str, title: str = "") -> None:
+        """Embed one entry and store it; (source, ref) replaces on re-run."""
+        vector = np.asarray(self.embedder.embed([text])[0], dtype=_DTYPE)
+        self.store.upsert_vector_entry(
+            source=source,
+            ref=ref,
+            title=title,
+            body=text,
+            dim=int(vector.shape[0]),
+            embedding=_to_blob(vector),
+        )
+
+    def search(self, query: str, *, top_k: int = 5) -> list[dict]:
+        """Top-k most similar entries as dicts with score + metadata."""
+        query_vec = np.asarray(self.embedder.embed([query])[0], dtype=_DTYPE)
+        rows = self.store.vector_rows(dim=int(query_vec.shape[0]))
+        if not rows:
+            return []
+        matrix = np.stack([_from_blob(row.embedding) for row in rows])
+        scores, indices = cosine_top_k(query_vec, matrix, top_k=top_k)
+        hits: list[dict] = []
+        for score, index in zip(scores.tolist(), indices.tolist()):
+            row = rows[index]
+            hits.append(
+                {
+                    "score": float(score),
+                    "source": row.source,
+                    "ref": row.ref,
+                    "title": row.title,
+                    "body": row.body,
+                }
+            )
+        return hits
+
+
+class FastEmbedder:
+    """fastembed-backed embedder; loads its ONNX model on first use only.
+
+    The import is deferred so importing this module never requires fastembed
+    to be installed — Tier-3 stays optional (plan §3.5).
+    """
+
+    DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+    def __init__(self, model_name: str | None = None) -> None:
+        self._model_name = model_name or self.DEFAULT_MODEL_NAME
+        self._model = None
+
+    def _load(self):
+        if self._model is None:
+            from fastembed import TextEmbedding
+
+            self._model = TextEmbedding(model_name=self._model_name)
+        return self._model
+
+    def embed(self, texts: list[str]) -> list[np.ndarray]:
+        if not texts:
+            return []
+        model = self._load()
+        return [np.asarray(vec, dtype=_DTYPE) for vec in model.embed(texts)]

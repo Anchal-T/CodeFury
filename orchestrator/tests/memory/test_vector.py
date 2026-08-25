@@ -1,12 +1,24 @@
 """Tests for Tier-3 vector math (orchestrator.memory.vector).
 
 Hermetic: fake embeddings only — no model download, no fastembed import.
+The one real-model search lives behind the ``slow`` marker at the bottom.
 """
+
+import sys
+import types
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from orchestrator.memory.vector import _from_blob, _to_blob, cosine_top_k
+from orchestrator.memory.store import StateStore
+from orchestrator.memory.vector import (
+    FastEmbedder,
+    VectorMemory,
+    _from_blob,
+    _to_blob,
+    cosine_top_k,
+)
 
 
 def test_blob_round_trip_preserves_floats() -> None:
@@ -51,3 +63,146 @@ def test_cosine_empty_matrix_returns_empty() -> None:
     query = np.asarray([1.0], dtype=np.float32)
     scores, indices = cosine_top_k(query, np.empty((0, 1), dtype=np.float32), top_k=5)
     assert scores.size == indices.size == 0
+
+
+# -- VectorMemory with a fake embedder ----------------------------------------
+
+
+class FakeEmbedder:
+    """Deterministic vector lookup; unknown texts embed to the zero vector."""
+
+    def __init__(self, vectors: dict[str, list[float]], dim: int = 2) -> None:
+        self.vectors = vectors
+        self.dim = dim
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: list[str]) -> list[np.ndarray]:
+        self.calls.append(list(texts))
+        return [
+            np.asarray(self.vectors.get(t, [0.0] * self.dim), dtype=np.float32)
+            for t in texts
+        ]
+
+
+@pytest.fixture()
+def store(tmp_path: Path) -> StateStore:
+    s = StateStore(tmp_path / "data" / "orchestrator.db")
+    s.init_schema()
+    yield s
+    s.close()
+
+
+def make_memory(store: StateStore, vectors: dict[str, list[float]]) -> VectorMemory:
+    return VectorMemory(store, embedder=FakeEmbedder(vectors))
+
+
+def test_upsert_then_search_finds_exact_entry(store: StateStore) -> None:
+    memory = make_memory(store, {"conflict decision": [1.0, 0.0]})
+    memory.upsert("conflict decision", source="knowledge", ref="repo_map.md", title="run 1")
+
+    hits = memory.search("conflict decision", top_k=3)
+
+    assert len(hits) == 1
+    assert hits[0]["score"] == pytest.approx(1.0)
+    assert hits[0]["source"] == "knowledge"
+    assert hits[0]["ref"] == "repo_map.md"
+    assert hits[0]["title"] == "run 1"
+    assert hits[0]["body"] == "conflict decision"
+
+
+def test_search_ranks_most_similar_first(store: StateStore) -> None:
+    memory = make_memory(
+        store,
+        {
+            "conflict entry": [1.0, 0.0],
+            "database entry": [0.0, 1.0],
+            "unrelated": [-1.0, 0.0],
+        },
+    )
+    for ref, text in [("a", "conflict entry"), ("b", "database entry"), ("c", "unrelated")]:
+        memory.upsert(text, source="report", ref=ref)
+
+    hits = memory.search("conflict entry", top_k=2)
+
+    assert [h["ref"] for h in hits] == ["a", "b"]
+    assert hits[0]["score"] >= hits[1]["score"]
+
+
+def test_search_respects_top_k_and_empty_store(store: StateStore) -> None:
+    memory = make_memory(store, {})
+    assert memory.search("anything", top_k=5) == []
+    for n in range(4):
+        memory.upsert(f"t{n}", source="report", ref=f"r{n}")
+    vectors = {f"t{n}": [float(n), 1.0] for n in range(4)}
+    memory.embedder = FakeEmbedder(vectors)
+    hits = memory.search("t3", top_k=2)
+    assert len(hits) == 2
+
+
+def test_search_skips_entries_of_other_dimensions(store: StateStore) -> None:
+    """Mixed-dim histories must never reach the ranking math (dim filter)."""
+    memory = make_memory(store, {"two dim": [1.0, 0.0]})
+    memory.upsert("two dim", source="knowledge", ref="a")
+    memory.store.upsert_vector_entry(
+        source="knowledge", ref="b", title="", body="three dim",
+        dim=3, embedding=_to_blob(np.ones(3, dtype=np.float32)),
+    )
+
+    hits = memory.search("two dim", top_k=5)
+
+    assert [h["ref"] for h in hits] == ["a"]
+
+
+def test_upsert_same_ref_replaces_not_duplicates(store: StateStore) -> None:
+    memory = make_memory(store, {"text one": [1.0, 0.0]})
+    memory.upsert("text one", source="report", ref="w-1")
+    memory.upsert("text one", source="report", ref="w-1")
+    assert len(memory.search("text one", top_k=10)) == 1
+
+
+def test_fastembedder_loads_model_lazily_and_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ONNX model is heavy: construction must stay free and the model
+    must load exactly once, on the first embed() call."""
+    created: list[str] = []
+
+    class StubModel:
+        def __init__(self, model_name: str) -> None:
+            created.append(model_name)
+
+        def embed(self, texts: list[str]) -> list[np.ndarray]:
+            return [np.full(3, 0.5, dtype=np.float32) for _ in texts]
+
+    monkeypatch.setitem(sys.modules, "fastembed", types.SimpleNamespace(TextEmbedding=StubModel))
+
+    embedder = FastEmbedder()
+    assert created == [], "construction must not touch fastembed"
+
+    first = embedder.embed(["a"])
+    second = embedder.embed(["b"])
+
+    assert created == [FastEmbedder.DEFAULT_MODEL_NAME]
+    assert len(first) == len(second) == 1
+
+
+@pytest.mark.slow
+def test_real_model_semantic_recall(tmp_path: Path) -> None:
+    """Integration: the actual MiniLM model ranks a paraphrased natural-language
+    query against seeded history. Downloads ~90MB ONNX on first use."""
+    pytest.importorskip("fastembed")
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        memory = VectorMemory(store)  # real FastEmbedder
+        memory.upsert(
+            "Merge conflicts between managers are resolved by the Domain Lead,"
+            " which dispatches one reconciliation worker per conflict (capped once).",
+            source="knowledge", ref="decisions.md#reconciliation", title="reconciliation policy",
+        )
+        memory.upsert(
+            "The orchestrator database runs in WAL mode with busy_timeout retries.",
+            source="knowledge", ref="decisions.md#sqlite", title="sqlite policy",
+        )
+        hits = memory.search("how do we resolve merge conflicts?", top_k=2)
+        assert hits[0]["title"] == "reconciliation policy"
+    finally:
+        store.close()
