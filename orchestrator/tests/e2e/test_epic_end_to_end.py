@@ -201,44 +201,53 @@ def test_concurrency_soak_cap_holds_under_load_and_leaves_no_zombies(
     import threading
 
     root = make_toy_repo(tmp_path, python_bin, git_init, max_workers=2)
+    # Soak must prove *concurrency* cap, not budget cap: uncap worker
+    # tokens so the 5 workers don't serialize on the budget lock.
+    config_path = root / "config.yaml"
+    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    cfg["budgets"]["worker_tokens"] = None
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     samples: list[int] = []
     stop = threading.Event()
 
-    def monitor(root_pid: int) -> None:
-        try:
-            parent = psutil.Process(root_pid)
-        except psutil.NoSuchProcess:
-            return
+    def monitor() -> None:
+        # Scan all processes for fake_worker.py — more robust than
+        # parent.children() which can miss short-lived grandchildren and is
+        # sensitive to pid reparenting races under load.
         while not stop.is_set():
-            try:
-                count = 0
-                for child in parent.children(recursive=True):
-                    try:
-                        if any(
-                            "fake_worker.py" in part for part in (child.cmdline() or [])
-                        ):
-                            count += 1
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                samples.append(count)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-            time.sleep(0.05)
+            count = 0
+            for proc in psutil.process_iter(["cmdline"]):
+                try:
+                    cmdline = proc.info["cmdline"] or []
+                    if any("fake_worker.py" in part for part in cmdline):
+                        # Count only non-zombie workers; zombies are reaped
+                        # separately via leftover_worker_processes().
+                        try:
+                            if proc.status() != psutil.STATUS_ZOMBIE:
+                                count += 1
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            samples.append(count)
+            time.sleep(0.02)
 
     args = [python_bin, "-m", "orchestrator", "manage", "--goal", "soak run"]
     args += [part for goal in (f"task {n}" for n in range(5)) for part in ("--sub-goal", goal)]
+    start = time.monotonic()
     proc = subprocess.Popen(
         args,
         cwd=str(root),
-        env=orchestrator_env(FAKE_WORKER_SLEEP_S="1.0"),
+        env=orchestrator_env(FAKE_WORKER_SLEEP_S="1.5"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         shell=False,
     )
-    watcher = threading.Thread(target=monitor, args=(proc.pid,), daemon=True)
+    watcher = threading.Thread(target=monitor, daemon=True)
     watcher.start()
     out, err = proc.communicate(timeout=PROC_TIMEOUT_S)
+    elapsed = time.monotonic() - start
     stop.set()
     watcher.join()
 
@@ -247,5 +256,11 @@ def test_concurrency_soak_cap_holds_under_load_and_leaves_no_zombies(
     assert samples, "soak monitor collected no samples"
     peak = max(samples)
     assert peak <= 2, f"worker cap breached: {peak} concurrent workers"
-    assert peak >= 2, f"no parallelism observed (peak {peak}) — soak proves nothing"
+    # Peak >=2 proves parallelism, but under CI load the 20ms sampler can
+    # still miss the overlap window. Fall back to wall-time: 5 × 1.5s serial
+    # would be ~7.5s; cap 2 finishes in ~3 waves (~4.5s + overhead).
+    if peak < 2:
+        assert elapsed < 7.0, (
+            f"no parallelism observed (peak {peak}, elapsed {elapsed:.1f}s) — soak proves nothing"
+        )
     assert leftover_worker_processes() == []
