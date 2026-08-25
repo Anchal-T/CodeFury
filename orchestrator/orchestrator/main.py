@@ -100,6 +100,7 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
     try:
         with StateStore(base / config.paths.db) as store:
             store.init_schema()
+            memory = auto_memory(store)
             click.echo(f"[run] task {task.id} → worker loop (repo: {repo_root})")
             report = run_worker_task(
                 task,
@@ -109,6 +110,7 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
                 test_command=config.execution.test_command,
                 budget=_budget(store, config),
                 runlog=runlog,
+                memory=memory,
             )
     finally:
         runlog.close()
@@ -156,6 +158,7 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
     try:
         with StateStore(base / config.paths.db) as store:
             store.init_schema()
+            memory = auto_memory(store)
             graph = build_graph(
                 store=store,
                 worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
@@ -171,6 +174,7 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
                 domains_dir=base / config.paths.domains,
                 budget=_budget(store, config),
                 runlog=runlog,
+                memory=memory,
             )
             click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
             result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))
@@ -231,6 +235,7 @@ def lead(
     try:
         with StateStore(base / config.paths.db) as store:
             store.init_schema()
+            memory = auto_memory(store)
             graph = build_lead_graph(
                 store=store,
                 worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
@@ -246,6 +251,7 @@ def lead(
                 domains_dir=base / config.paths.domains,
                 budget=_budget(store, config),
                 runlog=runlog,
+                memory=memory,
             )
             click.echo(
                 f"[lead] task {parent.id} → {len(manager_goals)} manager(s), "

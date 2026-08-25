@@ -73,6 +73,7 @@ def start(
         domains_dir = base / config.paths.domains
         budget = BudgetTracker(store, config.budgets)
         runlog = setup_logging(base / config.paths.logs)
+        memory = auto_memory(store)
 
         def lead_graph_factory(lead: Task, checkpointer):
             return build_lead_graph(
@@ -88,6 +89,7 @@ def start(
                 checkpointer=checkpointer,
                 budget=budget,
                 runlog=runlog,
+                memory=memory,
             )
 
         try:
@@ -104,6 +106,7 @@ def start(
                 knowledge=knowledge,
                 project_state=domains_dir / "PROJECT_STATE.md",
                 runlog=runlog,
+                memory=memory,
             )
         finally:
             runlog.close()
