@@ -22,6 +22,7 @@ from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.logging_setup import setup_logging
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
+from orchestrator.memory.vector import auto_memory, recall_context
 
 
 @click.command()
@@ -72,6 +73,7 @@ def start(
         domains_dir = base / config.paths.domains
         budget = BudgetTracker(store, config.budgets)
         runlog = setup_logging(base / config.paths.logs)
+        memory = auto_memory(store)
 
         def lead_graph_factory(lead: Task, checkpointer):
             return build_lead_graph(
@@ -87,6 +89,7 @@ def start(
                 checkpointer=checkpointer,
                 budget=budget,
                 runlog=runlog,
+                memory=memory,
             )
 
         try:
@@ -103,6 +106,7 @@ def start(
                 knowledge=knowledge,
                 project_state=domains_dir / "PROJECT_STATE.md",
                 runlog=runlog,
+                memory=memory,
             )
         finally:
             runlog.close()
@@ -200,7 +204,14 @@ def _start_plan_mode(
             raise click.ClickException(f"task id already exists: {task_id}")
         domains_dir = base / config.paths.domains
         knowledge = KnowledgeDocs()
+        memory = auto_memory(store)
         planning_context = knowledge.read_latest(domains_dir / "PROJECT_STATE.md")
+        # Tier-3 seam (Phase 7): supplement markdown with recalled history.
+        history = recall_context(memory, epic_goal)
+        if history:
+            planning_context = (
+                f"{planning_context}\n\n{history}" if planning_context else history
+            )
         leads = plan_epic(
             epic=epic,
             decomposer=StaticEpicDecomposer(pairs),

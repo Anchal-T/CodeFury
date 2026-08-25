@@ -10,3 +10,4 @@
 - No new heavy dependencies (torch, docker, redis) without explicit approval — this project must stay lightweight and local-only.
 - Commit messages: `<scope>: <what changed>`, one logical change per commit.
 - When blocked or uncertain about architecture, stop and report — don't silently improvise a workaround.
+Run ocr(open code review) tool to review the codebase, the cli tool is installed and configured on the system, do a review before commiting to the repository.

@@ -44,6 +44,7 @@ def build_graph(
     domains_dir=None,
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
+    memory=None,
 ):
     """Assemble and compile the Manager/Worker StateGraph with injected deps.
 
@@ -65,6 +66,7 @@ def build_graph(
         domains_dir=domains_dir,
         budget=budget,
         runlog=runlog,
+        memory=memory,
     )
 
     def _result(

@@ -442,6 +442,50 @@ class MemoryRunLogger:
         self.events.append((kind, dict(fields)))
 
 
+class FakeVectorMemory:
+    """Captures upserts; same interface as VectorMemory.upsert."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, dict]] = []
+
+    def upsert(self, text: str, **metadata: object) -> None:
+        self.entries.append((text, dict(metadata)))
+
+
+def test_worker_indexes_report_summary(pipeline) -> None:
+    """Report summaries land in Tier-3 memory for later semantic recall."""
+    store, worktrees, runner, passing_tests, _ = pipeline
+    memory = FakeVectorMemory()
+
+    run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+        memory=memory,
+    )
+
+    assert len(memory.entries) == 1
+    text, meta = memory.entries[0]
+    assert "worker exit=0" in text
+    assert meta["source"] == "report"
+    assert meta["ref"] == "t-42"
+    assert meta["title"] == "worker:t-42"
+
+
+def test_worker_without_memory_skips_indexing(pipeline) -> None:
+    store, worktrees, runner, passing_tests, _ = pipeline
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+    )
+    assert report.tests_passed  # no memory passed — nothing to assert beyond no-crash
+
+
 def test_pipeline_emits_task_start_and_end_events(pipeline) -> None:
     store, worktrees, runner, passing_tests, _ = pipeline
     runlog = MemoryRunLogger()

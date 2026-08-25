@@ -128,6 +128,42 @@ def test_finalize_epic_done_when_all_leads_resolved(
     assert "epic-1" in text and "backend" in text and "infra" in text
 
 
+class FakeVectorMemory:
+    """Captures upserts; same interface as VectorMemory.upsert."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, dict]] = []
+
+    def upsert(self, text: str, **metadata: object) -> None:
+        self.entries.append((text, dict(metadata)))
+
+
+def test_finalize_epic_indexes_project_state_section(
+    store: StateStore, project_state: Path
+) -> None:
+    """The PROJECT_STATE.md section the epic writes is Tier-3 indexed too."""
+    epic, leads = _plan_two_leads(store)
+    for lead in leads:
+        store.set_task_status(lead.id, "done")
+    memory = FakeVectorMemory()
+
+    report = finalize_epic(
+        epic=store.get_task("epic-1"),
+        store=store,
+        knowledge=KnowledgeDocs(),
+        project_state=project_state,
+        memory=memory,
+    )
+
+    assert report is not None and report.tests_passed
+    assert len(memory.entries) == 1
+    text, meta = memory.entries[0]
+    assert "backend: done" in text
+    assert meta["source"] == "knowledge"
+    assert str(project_state) in str(meta["ref"])
+    assert meta["title"] == "epic epic-1"
+
+
 def test_finalize_epic_failed_when_any_lead_failed(
     store: StateStore, project_state: Path
 ) -> None:

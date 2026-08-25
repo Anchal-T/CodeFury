@@ -106,6 +106,47 @@ def test_record_emits_report_event(store: StateStore) -> None:
     ]
 
 
+class FakeVectorMemory:
+    """Captures upserts; same interface as VectorMemory.upsert."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, dict]] = []
+
+    def upsert(self, text: str, **metadata: object) -> None:
+        self.entries.append((text, dict(metadata)))
+
+
+def test_knowledge_section_is_indexed_when_memory_configured(
+    store: StateStore, tmp_path: Path
+) -> None:
+    doc = tmp_path / "domains" / "backend" / "repo_map.md"
+    memory = FakeVectorMemory()
+    recorder = OutcomeRecorder(
+        store, agent_role="lead", knowledge=KnowledgeDocs(), memory=memory  # type: ignore[arg-type]
+    )
+    recorder.record(
+        make_task("lead-1"),
+        RecordRequest(
+            ok=True, blockers=[], summary="done",
+            knowledge_path=doc, knowledge_title="lead run lead-1", knowledge_body="repo map body text",
+        ),
+    )
+
+    assert len(memory.entries) == 1
+    text, meta = memory.entries[0]
+    assert text == "repo map body text"
+    assert meta["source"] == "knowledge"
+    assert str(doc) in meta["ref"]
+    assert meta["title"] == "lead run lead-1"
+
+
+def test_record_without_knowledge_target_indexes_nothing(store: StateStore) -> None:
+    memory = FakeVectorMemory()
+    recorder = OutcomeRecorder(store, agent_role="lead", memory=memory)  # type: ignore[arg-type]
+    recorder.record(make_task("lead-2"), RecordRequest(ok=True, blockers=[], summary="done"))
+    assert memory.entries == []
+
+
 def test_knowledge_section_appended_when_configured(
     store: StateStore, tmp_path: Path
 ) -> None:

@@ -53,3 +53,29 @@ def test_append_section_handles_file_without_trailing_newline(tmp_path: Path) ->
 
     text = target.read_text(encoding="utf-8")
     assert text.startswith("# no trailing newline\n\n## after — ")
+
+
+# -- Phase 7: section parsing for Tier-3 indexing ------------------------------
+
+
+def test_parse_sections_splits_on_headings(tmp_path: Path) -> None:
+    from orchestrator.memory.knowledge_docs import parse_sections
+
+    doc = tmp_path / "repo_map.md"
+    doc.write_text(
+        "## lead run lead-1 — 2026-08-24T10:00:00Z\n\nbody one line\nbody two\n\n"
+        "## lead run lead-2 — 2026-08-25T11:00:00Z\n\nsecond body\n",
+        encoding="utf-8",
+    )
+    sections = parse_sections(doc.read_text(encoding="utf-8"))
+    assert [(title, body) for title, body in sections] == [
+        ("lead run lead-1 — 2026-08-24T10:00:00Z", "body one line\nbody two"),
+        ("lead run lead-2 — 2026-08-25T11:00:00Z", "second body"),
+    ]
+
+
+def test_parse_sections_ignores_preamble_and_empty_docs(tmp_path: Path) -> None:
+    from orchestrator.memory.knowledge_docs import parse_sections
+
+    assert parse_sections("# just a title\nsome intro text\n") == []
+    assert parse_sections("") == []

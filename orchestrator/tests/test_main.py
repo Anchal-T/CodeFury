@@ -1,7 +1,8 @@
 """Tests for the manage/lead/start/approve CLI commands, plus the Phase 6
-status/logs introspection commands."""
+status/logs introspection commands and Phase 7 recall/reindex."""
 
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -548,3 +549,104 @@ def test_logs_tail_rejects_non_numeric_value(
 
     assert result.exit_code != 0
     assert "non-negative integer" in result.output
+
+
+class FakeVectorMemory:
+    """Captures upserts and returns canned hits; VectorMemory surface."""
+
+    def __init__(self, hits: list[dict] | None = None) -> None:
+        self.hits = hits or []
+        self.store = types.SimpleNamespace(vector_rows=lambda dim=None: [object()])
+        self.upserts: list[tuple[str, dict]] = []
+
+    def search(self, query: str, *, top_k: int = 5) -> list[dict]:
+        return self.hits[:top_k]
+
+    def upsert(self, text: str, **metadata: object) -> None:
+        self.upserts.append((text, dict(metadata)))
+
+
+def test_recall_prints_ranked_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    import orchestrator.main as main_module
+
+    memory = FakeVectorMemory(
+        hits=[
+            {"score": 0.81, "source": "knowledge", "ref": "d.md#r", "title": "reconciliation policy",
+             "body": "one reconciler per conflict"},
+        ]
+    )
+    monkeypatch.setattr(main_module, "auto_memory", lambda store: memory)
+
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    (root / "data").mkdir()
+    with StateStore(root / "data" / "db.sqlite") as store:
+        store.init_schema()
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["recall", "how do we resolve conflicts?"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "0.810" in result.output
+    assert "[knowledge] reconciliation policy" in result.output
+    assert "one reconciler per conflict" in result.output
+
+
+def test_recall_without_tier3_fails_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    import orchestrator.main as main_module
+
+    monkeypatch.setattr(main_module, "auto_memory", lambda store: None)
+
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    (root / "data").mkdir()
+    with StateStore(root / "data" / "db.sqlite") as store:
+        store.init_schema()
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["recall", "anything"])
+
+    assert result.exit_code != 0
+    assert "Tier-3 unavailable" in result.output
+
+
+def test_reindex_walks_docs_and_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python_bin: str, git_init
+) -> None:
+    from orchestrator.contracts import Report
+
+    import orchestrator.main as main_module
+
+    memory = FakeVectorMemory()
+    monkeypatch.setattr(main_module, "auto_memory", lambda store: memory)
+
+    root = tmp_path / "repo"
+    _init_repo(root, git_init)
+    _write_config(root, python_bin)
+    docs = root / "domains" / "backend"
+    docs.mkdir(parents=True)
+    (docs / "repo_map.md").write_text(
+        "## lead run lead-1 — 2026-08-25T00:00:00Z\n\nconflict resolved by reconciler\n",
+        encoding="utf-8",
+    )
+    with StateStore(root / "data" / "db.sqlite") as store:
+        store.init_schema()
+        store.save_report(Report(
+            task_id="w-1", agent="worker:w-1", summary="wrote module_a",
+            diff_ref=None, tests_passed=True, tokens_used=10,
+        ))
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli, ["reindex"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "2 entries indexed" in result.output
+    refs = {meta["ref"] for _text, meta in memory.upserts}
+    assert any(ref.startswith(str(docs / "repo_map.md")) for ref in refs)
+    assert "w-1" in refs

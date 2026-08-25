@@ -34,6 +34,7 @@ from orchestrator.graph.state import LeadState
 from orchestrator.graph.worker import make_worker_node, run_tests
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
+from orchestrator.memory.vector import recall_context
 
 
 def _attempts_delta(new_recons: list[dict]) -> dict[str, int]:
@@ -68,6 +69,7 @@ def build_lead_graph(
     checkpointer=None,
     budget=None,
     runlog=None,
+    memory=None,
 ):
     """Assemble and compile Architect-less lead → managers → workers graph.
 
@@ -97,6 +99,7 @@ def build_lead_graph(
         domains_dir=domains_dir,
         budget=budget,
         runlog=runlog,
+        memory=memory,
     )
     reconcile_worker = make_worker_node(
         store=store,
@@ -110,6 +113,7 @@ def build_lead_graph(
         domains_dir=domains_dir,
         budget=budget,
         runlog=runlog,
+        memory=memory,
     )
 
     recorder = OutcomeRecorder(
@@ -120,6 +124,7 @@ def build_lead_graph(
         ),
         knowledge=knowledge,
         runlog=runlog,
+        memory=memory,
     )
 
     def _finalize(
@@ -175,6 +180,13 @@ def build_lead_graph(
             if domains_dir is not None and lead_task.domain:
                 planning_context = knowledge.read_latest(
                     domains_dir / lead_task.domain / "repo_map.md"
+                )
+            # Tier-3 seam (Phase 7): top-k relevant history supplements the
+            # markdown context — markdown stays primary, vectors add recall.
+            history = recall_context(memory, lead_task.goal)
+            if history:
+                planning_context = (
+                    f"{planning_context}\n\n{history}" if planning_context else history
                 )
             children = decomposer.decompose(lead_task, context=planning_context)
             if not children:
