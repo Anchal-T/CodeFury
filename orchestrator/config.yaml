@@ -1,0 +1,39 @@
+concurrency:
+  max_workers: 3          # tune to your laptop's free RAM
+  max_managers: 2
+
+budgets:
+  # Per-level token caps enforced at dispatch; null disables a level's cap.
+  # Phase 8 measured baseline (fake_worker attributes 1000/task): a full
+  # two-domain epic burned 2k tokens, all at level 0 — levels 1-3 stay idle
+  # until they make real LLM calls. Keep the defaults as headroom and tune
+  # against YOUR burn via scripts/token_report.py after a real run.
+  worker_tokens: 50000
+  manager_tokens: 150000
+  domain_lead_tokens: 300000
+  architect_tokens: 500000
+
+retries:
+  max_worker_retries: 2
+  max_manager_escalations: 1
+  max_reconcile_attempts: 1  # Domain Lead reconciliation dispatches per conflict
+
+execution:
+  # Worker command is injectable: config here, or the ZCODE_CMD env var.
+  # A "{prompt}" placeholder is substituted in place; without it the prompt
+  # is appended as the last argument.
+  zcode_command: [zcode]
+  # test_command defaults to [<running interpreter>, -m, pytest, -q] so it
+  # works on both Linux and Windows; set it here only to override.
+  worker_timeout_s: 1800
+
+model_effort:
+  simple_task: low
+  standard_task: high
+  hard_task: max
+
+paths:
+  workspaces: ./workspaces
+  domains: ./domains
+  db: ./data/orchestrator.db
+  logs: ./logs

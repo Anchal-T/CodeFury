@@ -1,0 +1,16 @@
+# Core
+langgraph
+langgraph-checkpoint-sqlite==3.1.1   # SqliteSaver checkpointer for LangGraph
+pydantic
+pyyaml
+psutil
+click
+python-dotenv
+
+# Dev
+pytest
+
+# Optional Tier-3 semantic memory (Phase 7) — approved via roadmap §11;
+# loads its ONNX model on demand only (idle RAM unchanged).
+fastembed
+numpy
