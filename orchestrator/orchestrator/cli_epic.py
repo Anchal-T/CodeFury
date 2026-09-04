@@ -92,7 +92,7 @@ def start(
                 memory=memory,
             )
 
-        try:
+        with runlog:
             click.echo(f"[start] resuming epic {epic.id} ('{epic.goal}')")
             outcomes = run_approved_leads(
                 store=store, epic=store.get_task(epic.id), lead_graph_factory=lead_graph_factory
@@ -108,8 +108,6 @@ def start(
                 runlog=runlog,
                 memory=memory,
             )
-        finally:
-            runlog.close()
         if report is None:
             waiting = [t for t in store.tasks_by_parent(epic.id) if t.status == "pending_approval"]
             click.echo(f"[start] epic {epic.id}: {len(waiting)} lead(s) still awaiting approval:")

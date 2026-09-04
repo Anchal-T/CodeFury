@@ -1,8 +1,10 @@
 """Task decomposition for the Manager (Level 1) and Domain Lead (Level 2).
 
-The Decomposer protocols are the seams where LLM-backed decomposers plug in
+The Decomposer protocol is the seam where LLM-backed decomposers plug in
 once a headless coding-agent CLI is available; the Static* implementations
-are deterministic and used by tests and demos.
+are deterministic and used by tests and demos. Level-specific protocols
+(DomainDecomposer, EpicDecomposer) keep call-site signatures self-documenting
+while sharing the single decompose shape.
 
 ``context`` (Phase 5 planning seam): callers pass the latest knowledge
 section — domain repo_map.md for leads, PROJECT_STATE.md for epics — so
@@ -19,20 +21,13 @@ from orchestrator.contracts import Task
 
 
 class Decomposer(Protocol):
-    """Turns a manager Task into its level-0 worker Tasks."""
+    """Turns a Task into its child Tasks, one level down."""
 
     def decompose(self, task: Task, context: str = "") -> list[Task]: ...
 
 
-class DomainDecomposer(Protocol):
+class DomainDecomposer(Decomposer, Protocol):
     """Turns a domain-lead Task into its level-1 manager Tasks."""
-
-    def decompose(self, task: Task, context: str = "") -> list[Task]: ...
-
-
-def is_decomposer(obj: object) -> bool:
-    """Runtime check for either decomposer protocol."""
-    return hasattr(obj, "decompose") and callable(obj.decompose)
 
 
 def _children(
@@ -61,23 +56,30 @@ def _children(
 
 
 class StaticDecomposer:
-    """Decomposes a task into one worker task per explicit sub-goal."""
+    """Decomposes a task into one child task per explicit sub-goal.
+
+    ``child_level`` pins the level of the produced children: 0 = workers
+    (manager input), 1 = managers (domain-lead input). The level-specific
+    names below stay distinct so call sites, tests, and fakes read as their
+    own level; they share this one implementation.
+    """
+
+    child_level = 0
 
     def __init__(self, sub_goals: list[str]) -> None:
         self.sub_goals = list(sub_goals)
 
     def decompose(self, task: Task, context: str = "") -> list[Task]:
-        return _children(task, level=0, goals=self.sub_goals)
+        return _children(task, level=self.child_level, goals=self.sub_goals)
 
 
-class StaticDomainDecomposer:
-    """Decomposes a lead task into one manager task per explicit goal."""
+class StaticDomainDecomposer(StaticDecomposer):
+    """Level-1 StaticDecomposer: children are manager Tasks (lead input)."""
+
+    child_level = 1
 
     def __init__(self, manager_goals: list[str]) -> None:
-        self.manager_goals = list(manager_goals)
-
-    def decompose(self, task: Task, context: str = "") -> list[Task]:
-        return _children(task, level=1, goals=self.manager_goals)
+        super().__init__(sub_goals=list(manager_goals))
 
 
 class SingleWorkerDecomposer:
@@ -98,10 +100,8 @@ class SingleManagerDecomposer:
         return StaticDomainDecomposer([task.goal]).decompose(task, context=context)
 
 
-class EpicDecomposer(Protocol):
+class EpicDecomposer(Decomposer, Protocol):
     """Turns an epic Task into its level-2 domain-lead Tasks."""
-
-    def decompose(self, task: Task, context: str = "") -> list[Task]: ...
 
 
 class StaticEpicDecomposer:

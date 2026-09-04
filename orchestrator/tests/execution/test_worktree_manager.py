@@ -1,6 +1,5 @@
 """Tests for orchestrator.execution.worktree_manager against a temp git repo."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -64,31 +63,6 @@ def test_create_is_idempotent_for_retries(manager: WorktreeManager) -> None:
     assert manager.commit("w5", "retry attempt") is True
 
 
-def test_commit_and_diff_stat(manager: WorktreeManager) -> None:
-    manager.create("w1")
-    (manager.worktree_path("w1") / "feature.py").write_text("x = 1\n", encoding="utf-8")
-    assert manager.commit("w1", "add feature") is True
-    stat = manager.diff_stat("w1")
-    assert "feature.py" in stat
-
-    assert manager.commit("w1", "nothing new") is False
-
-
-def test_diff_stat_covers_all_worker_commits(manager: WorktreeManager) -> None:
-    """diff_stat must summarize the worker branch vs its merge base — not
-    just the most recent commit."""
-    manager.create("w1b")
-    path = manager.worktree_path("w1b")
-    (path / "first.py").write_text("one\n", encoding="utf-8")
-    manager.commit("w1b", "first commit")
-    (path / "second.py").write_text("two\n", encoding="utf-8")
-    manager.commit("w1b", "second commit")
-
-    stat = manager.diff_stat("w1b")
-    assert "first.py" in stat, "earlier worker commits must not be omitted"
-    assert "second.py" in stat
-
-
 def test_merge_brings_changes_into_repo(manager: WorktreeManager, git_repo: Path) -> None:
     manager.create("w2")
     (manager.worktree_path("w2") / "merged.txt").write_text("data\n", encoding="utf-8")
@@ -140,31 +114,6 @@ def test_merge_conflict_raises_typed_error_naming_files(
 
 def test_conflict_blocker_prefix_is_shared_convention() -> None:
     assert CONFLICT_BLOCKER_PREFIX == "merge conflict"
-
-
-def test_discard_removes_worktree_and_branch(manager: WorktreeManager, git_repo: Path) -> None:
-    manager.create("w3")
-    manager.discard("w3")
-    assert not manager.worktree_path("w3").exists()
-    assert "orchestrator/worker-w3" not in _git(["branch", "--list"], cwd=git_repo)
-
-
-def test_discard_tolerates_never_created_or_already_removed(
-    manager: WorktreeManager,
-) -> None:
-    """Teardown is best-effort: partial create() failures and double-discards
-    must not raise or leak the branch."""
-    manager.discard("ghost")          # never created
-    manager.create("w3b")
-    manager.discard("w3b")
-    manager.discard("w3b")            # already removed
-
-
-def test_cleanup_prunes_stale_worktrees(manager: WorktreeManager, git_repo: Path) -> None:
-    path = manager.create("w4")
-    shutil.rmtree(path)  # stdlib: portable (rm -rf is Unix-only)
-    manager.cleanup()
-    assert "worker_w4" not in _git(["worktree", "list"], cwd=git_repo)
 
 
 def test_find_repo_root(git_repo: Path) -> None:

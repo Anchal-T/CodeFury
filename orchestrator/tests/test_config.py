@@ -18,7 +18,27 @@ def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_committed_config_parses() -> None:
     """Smoke-check only: the committed config.yaml is a tuned deployment
     artifact — its operational values must not be pinned here."""
-    assert load_config(REPO_CONFIG).raw
+    assert load_config(REPO_CONFIG).concurrency.max_workers == 3
+
+
+def test_unknown_keys_are_ignored(tmp_path: Path) -> None:
+    """Untuned/extra keys in config.yaml (deploy-time metadata, future knobs)
+    must not break loading — the loader pins only the schema it knows."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_effort:\n  simple_task: low\nunknown_section:\n  a: 1\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.concurrency.max_workers == 3
+
+
+def test_negative_max_managers_is_not_validated_away(tmp_path: Path) -> None:
+    """max_managers was removed with the concurrency cap it once fed; until a
+    consumer exists it is an inert key — loading must simply ignore it."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("concurrency:\n  max_managers: -2\n", encoding="utf-8")
+    assert load_config(config_file).concurrency.max_workers == 3
 
 
 def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:

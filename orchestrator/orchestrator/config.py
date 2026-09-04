@@ -47,7 +47,6 @@ class PathsConfig:
 @dataclass
 class ConcurrencyConfig:
     max_workers: int = 3
-    max_managers: int = 2
 
 
 @dataclass
@@ -78,7 +77,6 @@ class Config:
     concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
     retries: RetryConfig = field(default_factory=RetryConfig)
     budgets: BudgetsConfig = field(default_factory=BudgetsConfig)
-    raw: dict = field(default_factory=dict)
 
 
 def _as_list(value: object) -> list[str] | None:
@@ -174,7 +172,6 @@ def load_config(path: Path | None = None) -> Config:
         ),
         concurrency=ConcurrencyConfig(
             max_workers=int(conc_raw.get("max_workers", ConcurrencyConfig.max_workers)),
-            max_managers=int(conc_raw.get("max_managers", ConcurrencyConfig.max_managers)),
         ),
         retries=RetryConfig(
             max_worker_retries=int(retries_raw.get("max_worker_retries", RetryConfig.max_worker_retries)),
@@ -195,16 +192,11 @@ def load_config(path: Path | None = None) -> Config:
                 budgets_raw, "architect_tokens", BudgetsConfig.architect_tokens
             ),
         ),
-        raw=data,
     )
     if config.concurrency.max_workers < 1:
         raise ValueError(
             f"concurrency.max_workers must be >= 1, got {config.concurrency.max_workers}"
             " (0 would deadlock every worker dispatch)"
-        )
-    if config.concurrency.max_managers < 1:
-        raise ValueError(
-            f"concurrency.max_managers must be >= 1, got {config.concurrency.max_managers}"
         )
     if config.retries.max_reconcile_attempts < 0:
         raise ValueError(

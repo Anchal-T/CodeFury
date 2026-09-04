@@ -1,6 +1,6 @@
 """SQLite state store (plan §3.2): one file, WAL mode, no server.
 
-Tables: tasks, reports, agents, token_usage. Each row keeps the queryable
+Tables: tasks, reports, token_usage. Each row keeps the queryable
 columns as real columns and the full pydantic model as a JSON payload, so
 contracts can evolve without schema churn. Graph checkpoints live in the
 same file under SqliteSaver's own tables (checkpoints/writes), opened via
@@ -92,12 +92,6 @@ CREATE TABLE IF NOT EXISTS reports (
     tokens_used  INTEGER NOT NULL,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     payload      TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agents (
-    id      TEXT PRIMARY KEY,
-    level   INTEGER NOT NULL,
-    role    TEXT NOT NULL,
-    payload TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS token_usage (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

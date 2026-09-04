@@ -1,6 +1,5 @@
 concurrency:
   max_workers: 3          # tune to your laptop's free RAM
-  max_managers: 2
 
 budgets:
   # Per-level token caps enforced at dispatch; null disables a level's cap.
@@ -26,11 +25,6 @@ execution:
   # test_command defaults to [<running interpreter>, -m, pytest, -q] so it
   # works on both Linux and Windows; set it here only to override.
   worker_timeout_s: 1800
-
-model_effort:
-  simple_task: low
-  standard_task: high
-  hard_task: max
 
 paths:
   workspaces: ./workspaces

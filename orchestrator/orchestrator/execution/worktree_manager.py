@@ -2,7 +2,8 @@
 
 Each worker gets ``workspaces/worker_<id>/`` on its own branch; the pipeline
 commits the worker's changes there, and a Manager (Phase 2) reviews the diff
-and merges (``git merge --no-ff``) or discards. All git calls are list-form
+and merges (``git merge --no-ff``) or leaves the worktree for the next
+attempt. All git calls are list-form
 subprocess invocations with shell=False so this works on Linux and Windows.
 """
 
@@ -62,7 +63,7 @@ def find_repo_root(start: Path) -> Path:
 
 
 class WorktreeManager:
-    """Creates, commits, merges, and cleans up per-worker git worktrees."""
+    """Creates, commits, and merges per-worker git worktrees."""
 
     def __init__(self, repo_root: Path, workspaces_dir: Path) -> None:
         self.repo_root = repo_root
@@ -137,23 +138,6 @@ class WorktreeManager:
         self._require(self._git(["commit", "-m", message], cwd=path), "commit")
         return True
 
-    def diff_stat(self, worker_id: str) -> str:
-        """One-line-per-file diff summary of the worker branch vs its base.
-
-        Runs against repo_root so the merge base is the fork point from the
-        integration branch (inside the worktree, HEAD *is* the worker
-        branch), and includes every commit the worker made.
-        """
-        branch = self.branch_name(worker_id)
-        base = self._require(
-            self._git(["merge-base", "HEAD", branch], cwd=self.repo_root),
-            "merge-base",
-        ).strip()
-        return self._require(
-            self._git(["diff", "--stat", f"{base}..{branch}"], cwd=self.repo_root),
-            "diff --stat",
-        ).strip()
-
     def merge(self, worker_id: str) -> None:
         """Merge the worker's branch into the current branch of repo_root with --no-ff.
 
@@ -176,20 +160,3 @@ class WorktreeManager:
                     f"git merge failed ({proc.returncode}): {detail}", files
                 )
             raise RuntimeError(f"git merge failed ({proc.returncode}): {detail}")
-
-    def discard(self, worker_id: str) -> None:
-        """Drop the worker's worktree and branch.
-
-        Best-effort teardown: tolerates state that is already gone (never
-        created, partially created, or previously discarded) instead of
-        raising — callers should not need defensive try/except around cleanup.
-        """
-        self._git(
-            ["worktree", "remove", "--force", str(self.worktree_path(worker_id))],
-            cwd=self.repo_root,
-        )
-        self._git(["branch", "-D", self.branch_name(worker_id)], cwd=self.repo_root)
-
-    def cleanup(self) -> None:
-        """Prune stale worktree metadata under workspaces_dir."""
-        self._require(self._git(["worktree", "prune"], cwd=self.repo_root), "worktree prune")
