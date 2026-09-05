@@ -1,43 +1,31 @@
-"""Cross-platform worker subprocess wrapper (plan §3.3).
+"""Agent-CLI harness adapter (plan §3.3, Phase 9): one worker task =
+one subprocess.Popen(args_list, shell=False) with the Task prompt passed
+to the agent command and cwd set to the worker's git worktree.
 
-One Worker task = one subprocess.Popen(args_list, shell=False) with the Task
-prompt passed to the worker command and cwd set to the worker's git worktree.
-The command is injectable (config.yaml ``execution.zcode_command`` or the
-``ZCODE_CMD`` environment variable) because the coding agent CLI may differ
-per machine. Whole-process-tree termination on timeout via psutil, which is
-the only reliable way to reap children on Windows.
+This is the built-in ``execution.harness: cli`` backend. The command is
+injectable (config.yaml ``execution.worker_command`` or the ``WORKER_CMD``
+environment variable) because the coding agent CLI may differ per machine —
+zcode, claude, codex, aider, anything that takes a prompt. Whole-process-tree
+termination on timeout via psutil, which is the only reliable way to reap
+children on Windows.
 """
 
 from __future__ import annotations
 
 import subprocess
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
 import psutil
 
+from orchestrator.execution.runner import RunnerResult
+
 PROMPT_PLACEHOLDER = "{prompt}"
 TREE_KILL_GRACE_S = 5.0
 
 
-@dataclass
-class RunnerResult:
-    """Outcome of one worker subprocess run."""
-
-    returncode: int
-    stdout: str
-    stderr: str
-    timed_out: bool
-    duration_s: float
-
-    @property
-    def ok(self) -> bool:
-        return self.returncode == 0 and not self.timed_out
-
-
-class ZCodeRunner:
+class AgentCliRunner:
     """Runs a single worker subprocess per Worker task."""
 
     def __init__(
@@ -141,3 +129,7 @@ class ZCodeRunner:
                 pass
             except psutil.AccessDenied:
                 pass
+
+
+#: Pre-Phase-9 name, kept so user scripts importing ZCodeRunner keep working.
+ZCodeRunner = AgentCliRunner

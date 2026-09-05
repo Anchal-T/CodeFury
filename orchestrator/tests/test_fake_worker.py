@@ -29,6 +29,28 @@ def test_fake_worker_writes_task_specific_outputs(tmp_path: Path, python_bin: st
     assert "prompt was" in (tmp_path / f"{module}.txt").read_text(encoding="utf-8")
 
 
+def test_fake_worker_parses_prompt_placeholder_flag(
+    tmp_path: Path, python_bin: str
+) -> None:
+    """Agent CLIs consume flags like ``--prompt=<text>``; the fake must treat
+    that as the prompt (flag stripped), not as prompt text containing the
+    flag — this is the {prompt}-placeholder harness shape (Phase 9)."""
+    prompt = "flagged task"
+    proc = subprocess.run(
+        [python_bin, str(FAKE_WORKER), f"--prompt={prompt}"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        shell=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    module = module_name_for(prompt)
+    assert (tmp_path / f"{module}.py").is_file(), (
+        "the --prompt= flag must be stripped before prompt handling"
+    )
+
+
 def test_fake_worker_fail_mode_exits_nonzero_without_changes(
     tmp_path: Path, python_bin: str
 ) -> None:

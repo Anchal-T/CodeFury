@@ -26,7 +26,7 @@ from orchestrator.cli_status import (
 from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
-from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.execution.runner import build_runner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.build_graph import build_graph
@@ -88,10 +88,7 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
         status="pending",
         assigned_to=None,
     )
-    runner = ZCodeRunner(
-        command=config.execution.zcode_command,
-        timeout=config.execution.worker_timeout_s,
-    )
+    runner = build_runner(config.execution)
     # Relative paths in config.yaml resolve against the config file's
     # directory (base), so runtime artifacts stay under orchestrator/.
     worktrees = WorktreeManager(repo_root, base / config.paths.workspaces)
@@ -157,10 +154,7 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
         graph = build_graph(
             store=store,
             worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
-            runner=ZCodeRunner(
-                command=config.execution.zcode_command,
-                timeout=config.execution.worker_timeout_s,
-            ),
+            runner=build_runner(config.execution),
             decomposer=StaticDecomposer(list(sub_goals)),
             retry_policy=RetryPolicy.from_config(config),
             test_command=config.execution.test_command,
@@ -231,10 +225,7 @@ def lead(
         graph = build_lead_graph(
             store=store,
             worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
-            runner=ZCodeRunner(
-                command=config.execution.zcode_command,
-                timeout=config.execution.worker_timeout_s,
-            ),
+            runner=build_runner(config.execution),
             decomposer=StaticDomainDecomposer(list(manager_goals)),
             test_command=config.execution.test_command,
             max_workers=config.concurrency.max_workers,

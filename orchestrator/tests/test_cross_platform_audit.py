@@ -42,12 +42,12 @@ def test_package_uses_no_shell_or_legacy_path_apis() -> None:
 def test_process_tree_kills_go_through_psutil() -> None:
     """Only the runner may terminate processes, and only via psutil so
     grandchildren get reaped on Windows too (plan §3.3)."""
-    runner = (PACKAGE_ROOT / "execution" / "zcode_runner.py").read_text(encoding="utf-8")
+    runner = (PACKAGE_ROOT / "execution" / "cli_runner.py").read_text(encoding="utf-8")
     assert "import psutil" in runner
     assert "terminate()" in runner and "kill()" in runner
 
     for source in package_sources():
-        if source.name == "zcode_runner.py":
+        if source.name == "cli_runner.py":
             continue
         text = source.read_text(encoding="utf-8")
         assert ".terminate()" not in text, f"{source.name} kills outside the runner"

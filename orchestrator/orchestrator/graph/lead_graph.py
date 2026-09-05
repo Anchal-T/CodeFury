@@ -18,8 +18,8 @@ from langgraph.graph import StateGraph
 from langgraph.types import Send
 
 from orchestrator.contracts import Report, Task
+from orchestrator.execution.runner import Runner
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import ZCodeRunner
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.build_graph import TEST_TIMEOUT_S, build_graph
 from orchestrator.graph.decompose import DomainDecomposer, SingleWorkerDecomposer
@@ -56,7 +56,7 @@ def build_lead_graph(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     decomposer: DomainDecomposer,
     test_command: list[str],
     max_workers: int = 3,

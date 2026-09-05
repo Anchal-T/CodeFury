@@ -24,7 +24,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/test_cli_status.py` — tree rendering, newest-file selection, tail printing, follow-loop partial-line holdback tests.
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
-- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries/budgets) with ZCODE_CMD env override and concurrency/budget validation.
+- `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries/budgets) with WORKER_CMD env override (legacy ZCODE_CMD accepted), execution.harness selection, and concurrency/budget validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
 - `orchestrator/orchestrator/logging_setup.py` — thread-safe JSONL RunLogger; setup_logging opens logs/run_<UTC ts>.jsonl per invocation.
@@ -35,13 +35,15 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol (Domain/Epic specializations) with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
 - `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): TOKENS_USED attribution, budget-gated dispatch, task_start/task_end events, async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): harness-agnostic Runner injection, token attribution (runner-reported or output convention), budget-gated dispatch, task_start/task_end events, async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
 - `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, Tier-1 knowledge + semantic-recall planning seam + checkpoint wiring.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
-- `orchestrator/orchestrator/execution/zcode_runner.py` — cross-platform worker subprocess wrapper (injectable command, prompt injection, psutil tree-kill on timeout).
+- `orchestrator/orchestrator/execution/runner.py` — harness contract layer (Phase 9): Runner protocol, RunnerResult (incl. runner-reported tokens_used), agent-CLI TOKENS_USED convention, and the config→runner factory with an extensible harness registry.
+- `orchestrator/orchestrator/execution/cli_runner.py` — built-in agent-CLI harness adapter: cross-platform worker subprocess wrapper (injectable worker_command, {prompt} injection, psutil tree-kill on timeout, token attribution from output); ZCodeRunner kept as alias.
 - `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/merge, repo-root discovery, MergeConflictError with conflicted-file extraction.
-- `orchestrator/tests/execution/test_zcode_runner.py` — runner tests: prompt passing, exit codes, timeout tree-kill.
+- `orchestrator/tests/execution/test_runner.py` — harness contract tests: token convention, RunnerResult defaults, protocol conformance, factory wiring + registry extension.
+- `orchestrator/tests/execution/test_cli_runner.py` — CLI adapter tests: prompt passing (append + {prompt} forms), exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree create/commit/merge lifecycle tests against a temp git repo, incl. typed merge-conflict errors.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
 - `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage/vector_entries, typed round-trips, parent/status queries, token_usage writers/readers + all_tasks/latest_tokens_by_task/latest_reports for the CLI; open_checkpointer() shares this one connection.

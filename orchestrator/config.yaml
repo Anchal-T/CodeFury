@@ -18,10 +18,16 @@ retries:
   max_reconcile_attempts: 1  # Domain Lead reconciliation dispatches per conflict
 
 execution:
-  # Worker command is injectable: config here, or the ZCODE_CMD env var.
+  # Harness agnostic (Phase 9): `harness` picks the runner backend (cli is
+  # the built-in adapter) and `worker_command` is its injectable argv.
+  # Config here, or the WORKER_CMD env var (legacy ZCODE_CMD still works).
   # A "{prompt}" placeholder is substituted in place; without it the prompt
-  # is appended as the last argument.
-  zcode_command: [zcode]
+  # is appended as the last argument. Any prompt-taking agent CLI works:
+  #   worker_command: [claude, -p, "{prompt}"]
+  #   worker_command: [codex, exec, "{prompt}"]
+  #   worker_command: [python, scripts/fake_worker.py]   # offline stand-in
+  harness: cli
+  worker_command: [zcode]
   # test_command defaults to [<running interpreter>, -m, pytest, -q] so it
   # works on both Linux and Windows; set it here only to override.
   worker_timeout_s: 1800

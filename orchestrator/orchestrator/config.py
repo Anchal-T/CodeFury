@@ -1,8 +1,9 @@
 """Typed loading of config.yaml (plan §8) with cross-platform defaults.
 
-The worker command is injectable three ways, lowest priority first:
-built-in ``DEFAULT_ZCODE_COMMAND`` < config.yaml ``execution.zcode_command``
-< the ``ZCODE_CMD`` environment variable.
+The worker harness is injectable three ways, lowest priority first:
+built-in ``DEFAULT_WORKER_COMMAND`` < config.yaml ``execution.worker_command``
+(the legacy ``zcode_command`` key still works) < the ``WORKER_CMD`` (legacy
+``ZCODE_CMD``) environment variable.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ZCODE_COMMAND = ["zcode"]
+DEFAULT_WORKER_COMMAND = ["zcode"]
+DEFAULT_HARNESS = "cli"
 # The running interpreter is the only spawnable python guaranteed to exist on
 # both Linux and Windows ("python3" is not an executable name on Windows).
 DEFAULT_TEST_COMMAND = [sys.executable, "-m", "pytest", "-q"]
@@ -31,7 +33,11 @@ PYTEST_NO_TESTS_EXIT_CODE = 5
 
 @dataclass
 class ExecutionConfig:
-    zcode_command: list[str] = field(default_factory=lambda: list(DEFAULT_ZCODE_COMMAND))
+    #: Which registered runner backend executes worker tasks (Phase 9).
+    harness: str = DEFAULT_HARNESS
+    #: Argv template for the worker harness; a ``{prompt}`` placeholder is
+    #: substituted in place, otherwise the prompt is appended as last argv.
+    worker_command: list[str] = field(default_factory=lambda: list(DEFAULT_WORKER_COMMAND))
     test_command: list[str] = field(default_factory=lambda: list(DEFAULT_TEST_COMMAND))
     worker_timeout_s: float = DEFAULT_WORKER_TIMEOUT_S
 
@@ -166,7 +172,8 @@ def load_config(path: Path | None = None) -> Config:
             logs=Path(paths_raw.get("logs", PathsConfig.logs)),
         ),
         execution=ExecutionConfig(
-            zcode_command=_as_list(exec_raw.get("zcode_command")) or list(DEFAULT_ZCODE_COMMAND),
+            harness=str(exec_raw.get("harness", DEFAULT_HARNESS)),
+            worker_command=_worker_command(exec_raw),
             test_command=_as_list(exec_raw.get("test_command")) or list(DEFAULT_TEST_COMMAND),
             worker_timeout_s=_positive_float(exec_raw, "worker_timeout_s", DEFAULT_WORKER_TIMEOUT_S),
         ),
@@ -203,7 +210,33 @@ def load_config(path: Path | None = None) -> Config:
             "retries.max_reconcile_attempts must be >= 0, got "
             f"{config.retries.max_reconcile_attempts}"
         )
-    env_cmd = os.environ.get("ZCODE_CMD")
+    env_cmd = _new_or_legacy(
+        os.environ.get("WORKER_CMD"),
+        os.environ.get("ZCODE_CMD"),
+        "ZCODE_CMD is deprecated; rename it to WORKER_CMD",
+    )
     if env_cmd:
-        config.execution.zcode_command = shlex.split(env_cmd)
+        config.execution.worker_command = shlex.split(str(env_cmd))
     return config
+
+
+def _new_or_legacy(new: object, old: object, deprecation: str) -> object:
+    """Resolve a renamed setting: a non-empty new value wins; otherwise a
+    non-empty legacy value is used with a deprecation warning. Empty new
+    values carry no opinion, so the legacy setting still applies."""
+    if new:
+        return new
+    if old:
+        logger.warning(deprecation)
+    return old
+
+
+def _worker_command(exec_raw: dict) -> list[str]:
+    """Resolve the worker command from the execution section (new
+    ``worker_command`` key, legacy ``zcode_command`` key, or the default)."""
+    raw = _new_or_legacy(
+        exec_raw.get("worker_command"),
+        exec_raw.get("zcode_command"),
+        "execution.zcode_command is deprecated; rename it to worker_command",
+    )
+    return _as_list(raw) or list(DEFAULT_WORKER_COMMAND)

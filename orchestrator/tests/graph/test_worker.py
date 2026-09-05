@@ -14,11 +14,11 @@ import pytest
 
 from orchestrator.config import BudgetsConfig
 from orchestrator.contracts import Task
+from orchestrator.execution.cli_runner import AgentCliRunner
+from orchestrator.execution.runner import RunnerResult
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
 from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX, BudgetTracker
 from orchestrator.graph.worker import (
-    _parse_tokens_used,
     make_worker_node,
     run_worker_task,
 )
@@ -49,7 +49,7 @@ def pipeline(git_repo: Path, tmp_path: Path, python_bin: str):
     store = StateStore(tmp_path / "data" / "orchestrator.db")
     store.init_schema()
     worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-    runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+    runner = AgentCliRunner(command=[python_bin, str(FAKE_WORKER)])
     passing_tests = [python_bin, "-c", "print('tests ok')"]
     failing_tests = [python_bin, "-c", "raise SystemExit(1)"]
     yield store, worktrees, runner, passing_tests, failing_tests
@@ -110,7 +110,7 @@ def test_worker_timeout_blocks_and_fails(tmp_path: Path, git_repo: Path, python_
     store.init_schema()
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-        slow_runner = ZCodeRunner(
+        slow_runner = AgentCliRunner(
             command=[python_bin, "-c", "import time; time.sleep(60)"],
             timeout=1.0,
         )
@@ -133,7 +133,7 @@ def test_blocked_marker_becomes_blocker(git_repo: Path, tmp_path: Path, python_b
     store.init_schema()
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-        blocked_runner = ZCodeRunner(
+        blocked_runner = AgentCliRunner(
             command=[
                 python_bin,
                 "-c",
@@ -159,7 +159,7 @@ def test_test_timeout_saves_failed_report(git_repo: Path, tmp_path: Path, python
     store.init_schema()
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-        runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+        runner = AgentCliRunner(command=[python_bin, str(FAKE_WORKER)])
         hanging_tests = [python_bin, "-c", "import time; time.sleep(60)"]
         report = run_worker_task(
             make_task(),
@@ -184,7 +184,7 @@ def test_pipeline_crash_saves_failed_report(git_repo: Path, tmp_path: Path) -> N
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
 
-        class CrashingRunner(ZCodeRunner):
+        class CrashingRunner(AgentCliRunner):
             def run(self, prompt: str, cwd: Path):
                 raise RuntimeError("boom")
 
@@ -210,7 +210,7 @@ def test_retry_same_task_id_gets_fresh_worktree(git_repo: Path, tmp_path: Path, 
     store.init_schema()
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-        runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+        runner = AgentCliRunner(command=[python_bin, str(FAKE_WORKER)])
         failing = [python_bin, "-c", "raise SystemExit(1)"]
         passing = [python_bin, "-c", "print('tests ok')"]
 
@@ -228,7 +228,7 @@ def test_retry_same_task_id_gets_fresh_worktree(git_repo: Path, tmp_path: Path, 
         store.close()
 
 
-class CountingRunner(ZCodeRunner):
+class CountingRunner(AgentCliRunner):
     """Records how many run() calls overlap, to observe the semaphore cap."""
 
     def __init__(self, command: list[str], hold_s: float = 0.4) -> None:
@@ -257,7 +257,7 @@ def test_worker_node_returns_report_and_persists(
     store.init_schema()
     try:
         worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-        runner = ZCodeRunner(command=[python_bin, str(FAKE_WORKER)])
+        runner = AgentCliRunner(command=[python_bin, str(FAKE_WORKER)])
         node = make_worker_node(
             store=store,
             worktrees=worktrees,
@@ -522,20 +522,6 @@ def test_budget_gate_emits_start_and_failed_end(pipeline) -> None:
     assert runlog.events[1][1] == {"task_id": "t-42", "status": "failed"}
 
 
-def test_parse_tokens_used_takes_last_marker() -> None:
-    assert _parse_tokens_used("TOKENS_USED: 100\nall done", "") == 100
-    assert _parse_tokens_used("TOKENS_USED: 5\nretry", "warning\nTOKENS_USED: 9") == 9
-
-
-def test_parse_tokens_used_missing_or_malformed_is_zero() -> None:
-    """A worker that never reported (crash, old agent CLI) costs nothing;
-    mid-line mentions are not markers — the line must stand alone."""
-    assert _parse_tokens_used("", "") == 0
-    assert _parse_tokens_used("plain output only", "no marker") == 0
-    assert _parse_tokens_used("TOKENS_USED: lots", "TOKENS_USED:") == 0
-    assert _parse_tokens_used("log says TOKENS_USED: 12 inline", "") == 0
-
-
 class NeverRunner:
     """Fails the test the moment the pipeline tries to spawn a worker."""
 
@@ -634,6 +620,37 @@ def test_report_carries_real_tokens_even_without_tracker(pipeline) -> None:
     )
     assert report.tokens_used == 77
     assert store.total_tokens_by_level(0) == 0, "no tracker, no booking"
+
+
+def test_runner_reported_tokens_win_over_output_marker(pipeline) -> None:
+    """A harness with first-class attribution books its own number (Phase 9
+    contract); the output convention only serves runners that can't report."""
+    store, worktrees, _, passing_tests, _ = pipeline
+
+    class ReportingRunner:
+        def run(self, prompt: str, cwd: Path) -> RunnerResult:
+            return RunnerResult(
+                returncode=0,
+                stdout="TOKENS_USED: 100",
+                stderr="",
+                timed_out=False,
+                duration_s=0.1,
+                tokens_used=300,
+            )
+
+    budget = BudgetTracker(store, BudgetsConfig(worker_tokens=1000))
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=ReportingRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        budget=budget,
+    )
+
+    assert report.tokens_used == 300
+    assert store.total_tokens_by_level(0) == 300
+    assert budget.remaining(0) == 700
 
 
 def test_worker_node_threads_budget_gate_to_pipeline(

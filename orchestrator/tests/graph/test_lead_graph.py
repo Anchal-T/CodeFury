@@ -16,7 +16,7 @@ import pytest
 
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.execution.cli_runner import AgentCliRunner
 from orchestrator.graph.decompose import StaticDomainDecomposer, StaticDecomposer
 from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
@@ -76,7 +76,7 @@ def build(store, git_repo, python_bin, decomposer, *, domains_dir=None,
     return build_lead_graph(
         store=store,
         worktrees=WorktreeManager(git_repo, git_repo / "workspaces"),
-        runner=runner or ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
+        runner=runner or AgentCliRunner(command=[python_bin, str(FAKE_WORKER)]),
         decomposer=decomposer,
         test_command=[python_bin, "-c", "print('tests ok')"],
         max_workers=max_workers,
@@ -294,7 +294,7 @@ class RecordingNoopRunner:
         self.prompts: list[str] = []
 
     def run(self, prompt: str, cwd: Path) -> object:
-        from orchestrator.execution.zcode_runner import RunnerResult
+        from orchestrator.execution.runner import RunnerResult
 
         self.prompts.append(prompt)
         return RunnerResult(returncode=0, stdout="ok", stderr="", timed_out=False, duration_s=0.0)

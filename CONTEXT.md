@@ -61,3 +61,10 @@ Re-invoking a lead graph with the same thread id and input None so LangGraph con
 
 **Tier-1 memory / knowledge context** (Phase 5):
 The cheapest memory tier — git-tracked markdown sections (repo_map.md per domain, PROJECT_STATE.md) read via KnowledgeDocs and prepended to worker prompts and planning seams. The future LLM seam for decomposers.
+
+**Harness** (Phase 9):
+Whatever executes one Worker Task: today an agent-CLI subprocess, pluggable tomorrow (SDK/API backends). Selected by config `execution.harness`; everything above the execution layer depends only on the Runner protocol, never on a concrete backend.
+_Avoid_: agent runner, executor, zcode (that's one harness, not the concept)
+
+**Runner** (Phase 9):
+The harness contract: anything with `run(prompt, cwd) -> RunnerResult`. RunnerResult carries the run's outcome plus optional runner-reported token attribution; when a backend can't report, `effective_tokens()` falls back to the agent-CLI output convention (a standalone `TOKENS_USED: <n>` stdout line, last marker wins). The built-in CLI adapter is AgentCliRunner (`execution.cli_runner.py`), driven by `execution.worker_command` where a `{prompt}` placeholder is substituted in place or the prompt is appended as the last argv token.

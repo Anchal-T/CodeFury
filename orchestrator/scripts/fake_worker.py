@@ -1,12 +1,13 @@
 """Fake worker command for demos and manual testing (dev utility).
 
 Stands in for a real coding-agent CLI: it receives the task prompt as its
-last argument (exactly like ZCodeRunner passes it) and makes a small, real
-code change in the current working directory.
+last argument (exactly like AgentCliRunner passes it without a {prompt}
+placeholder) and makes a small, real code change in the current working
+directory.
 
 Usage in the worker config (path relative to the worktree root, which is
 the repo root — the runner executes with cwd set to the worktree):
-    ZCODE_CMD="python3 orchestrator/scripts/fake_worker.py" python -m orchestrator run --goal "..."
+    WORKER_CMD="python3 orchestrator/scripts/fake_worker.py" python -m orchestrator run --goal "..."
 
 Modes (environment variables):
     FAKE_WORKER_FAIL=1              simulate a failing worker (retry demos)
@@ -37,7 +38,9 @@ DEFAULT_TOKENS = 1000
 
 
 def main() -> int:
-    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
+    # Both harness argv shapes land the prompt in the last argument: plain
+    # (appended) or flag-style (--prompt=<text> from a {prompt} placeholder).
+    prompt = sys.argv[-1].removeprefix("--prompt=") if len(sys.argv) > 1 else ""
     if os.environ.get("FAKE_WORKER_FAIL") == "1":
         print("fake worker: simulated failure (FAKE_WORKER_FAIL=1)", file=sys.stderr)
         return 1

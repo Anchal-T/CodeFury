@@ -13,7 +13,7 @@ import pytest
 
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.execution.cli_runner import AgentCliRunner
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.build_graph import build_graph
 from orchestrator.graph.decompose import StaticDecomposer
@@ -68,7 +68,7 @@ def test_graph_merges_both_workers_end_to_end(
     graph = build_graph(
         store=store,
         worktrees=worktrees,
-        runner=ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
+        runner=AgentCliRunner(command=[python_bin, str(FAKE_WORKER)]),
         decomposer=StaticDecomposer(["add module one", "add module two"]),
         retry_policy=RetryPolicy(max_worker_retries=2, max_manager_escalations=1),
         test_command=[python_bin, "-c", "print('tests ok')"],
@@ -112,7 +112,7 @@ def test_graph_emits_manager_result_summary(
     graph = build_graph(
         store=store,
         worktrees=worktrees,
-        runner=ZCodeRunner(command=[python_bin, str(FAKE_WORKER)]),
+        runner=AgentCliRunner(command=[python_bin, str(FAKE_WORKER)]),
         decomposer=StaticDecomposer(["add module one"]),
         retry_policy=RetryPolicy(max_worker_retries=2, max_manager_escalations=1),
         test_command=[python_bin, "-c", "print('tests ok')"],
@@ -142,7 +142,7 @@ def test_retry_cap_stops_runaway_loops(
     """An always-failing worker gets exactly max_worker_retries + 1 attempts,
     then the graph terminates with a failed parent — never an infinite loop."""
     worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
-    failing_runner = ZCodeRunner(command=[python_bin, "-c", "raise SystemExit(1)"])
+    failing_runner = AgentCliRunner(command=[python_bin, "-c", "raise SystemExit(1)"])
     graph = build_graph(
         store=store,
         worktrees=worktrees,
@@ -178,7 +178,7 @@ def test_empty_decomposition_fails_fast(
     graph = build_graph(
         store=store,
         worktrees=worktrees,
-        runner=ZCodeRunner(command=[python_bin, "-c", "pass"]),
+        runner=AgentCliRunner(command=[python_bin, "-c", "pass"]),
         decomposer=StaticDecomposer([]),
         retry_policy=RetryPolicy(max_worker_retries=2, max_manager_escalations=1),
         test_command=[python_bin, "-c", "print('tests ok')"],

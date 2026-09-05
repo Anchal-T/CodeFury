@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import psutil
+import pytest
 import yaml
 
 from orchestrator.memory.store import StateStore
@@ -27,7 +28,14 @@ def _git(args: list[str], cwd: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-def make_toy_repo(tmp_path: Path, python_bin: str, git_init, *, max_workers: int = 3) -> Path:
+def make_toy_repo(
+    tmp_path: Path,
+    python_bin: str,
+    git_init,
+    *,
+    max_workers: int = 3,
+    worker_command: list[str] | None = None,
+) -> Path:
     """A small real git repo with a tuned config pointing at the fake worker."""
     root = tmp_path / "toy-repo"
     root.mkdir()
@@ -42,7 +50,7 @@ def make_toy_repo(tmp_path: Path, python_bin: str, git_init, *, max_workers: int
             "architect_tokens": None,
         },
         "execution": {
-            "zcode_command": [python_bin, str(FAKE_WORKER)],
+            "worker_command": worker_command or [python_bin, str(FAKE_WORKER)],
             "worker_timeout_s": 120,
         },
         "paths": {
@@ -112,10 +120,25 @@ def wait_for_epic_status(db: Path, epic_id: str, want: str, timeout_s: float = 1
     return task.status if task else "<missing>"
 
 
+@pytest.mark.parametrize(
+    "worker_command",
+    [
+        [None, str(FAKE_WORKER)],                      # prompt appended as last argv
+        [None, str(FAKE_WORKER), "--prompt={prompt}"],  # {prompt} placeholder flag
+    ],
+    ids=["append-form", "placeholder-form"],
+)
 def test_full_hierarchy_epic_runs_and_dogfoods_memory(
-    tmp_path: Path, python_bin: str, git_init
+    tmp_path: Path, python_bin: str, git_init, worker_command: list[str]
 ) -> None:
-    root = make_toy_repo(tmp_path, python_bin, git_init)
+    """Phase 9 harness-agnosticism proof: the full epic passes with either
+    argv shape — the same pipeline drives any prompt-taking agent CLI."""
+    root = make_toy_repo(
+        tmp_path,
+        python_bin,
+        git_init,
+        worker_command=[python_bin if arg is None else arg for arg in worker_command],
+    )
     db = root / "data" / "orchestrator.db"
 
     # 1. Architect plans the epic; nothing runs yet.
@@ -200,9 +223,17 @@ def test_concurrency_soak_cap_holds_under_load_and_leaves_no_zombies(
     real (>1 observed), and the run must reap its whole process tree."""
     import threading
 
-    root = make_toy_repo(tmp_path, python_bin, git_init, max_workers=2)
+    root = make_toy_repo(
+        tmp_path,
+        python_bin,
+        git_init,
+        max_workers=2,
+        worker_command=[python_bin, str(FAKE_WORKER), "--prompt={prompt}"],
+    )
     # Soak must prove *concurrency* cap, not budget cap: uncap worker
-    # tokens so the 5 workers don't serialize on the budget lock.
+    # tokens so the 5 workers don't serialize on the budget lock. The
+    # {prompt}-placeholder argv shape here complements the epic test's
+    # append shape on the manage path (Phase 9).
     config_path = root / "config.yaml"
     cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     cfg["budgets"]["worker_tokens"] = None

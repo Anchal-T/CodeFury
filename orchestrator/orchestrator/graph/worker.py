@@ -8,7 +8,6 @@ manager are all injected, so the loop is unit-testable without a real LLM.
 from __future__ import annotations
 
 import asyncio
-import re
 import subprocess
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -17,28 +16,19 @@ from typing import TYPE_CHECKING
 
 from orchestrator.config import PYTEST_NO_TESTS_EXIT_CODE
 from orchestrator.contracts import Report, Task
+from orchestrator.execution.runner import Runner, RunnerResult
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.memory.store import StateStore
 from orchestrator.prompts import build_worker_prompt
 
 if TYPE_CHECKING:
     from orchestrator.logging_setup import RunLogger
+    from orchestrator.memory.knowledge_docs import KnowledgeDocs
     from orchestrator.memory.vector import VectorMemory
 
 TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
-
-#: Worker output convention for token attribution (Phase 6): a standalone
-#: 'TOKENS_USED: <n>' line; the last marker wins when retries append output.
-TOKENS_USED_PATTERN = re.compile(r"^TOKENS_USED:\s*(\d+)\s*$", re.MULTILINE)
-
-
-def _parse_tokens_used(*outputs: str) -> int:
-    """Extract reported token usage from worker output; absent/malformed → 0."""
-    matches = TOKENS_USED_PATTERN.findall("\n".join(outputs))
-    return int(matches[-1]) if matches else 0
 
 
 @dataclass
@@ -107,7 +97,7 @@ def run_worker_task(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     tests_timeout: float = TEST_TIMEOUT_S,
     knowledge_context: str = "",
@@ -163,7 +153,7 @@ def _run_pipeline(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     tests_timeout: float,
     knowledge_context: str = "",
@@ -198,7 +188,7 @@ def _run_pipeline(
         tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
         worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
 
-        tokens_used = _parse_tokens_used(result.stdout, result.stderr)
+        tokens_used = result.effective_tokens()
         if budget is not None:
             budget.record(task.level, tokens_used)
 
@@ -230,7 +220,7 @@ def make_worker_node(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     max_workers: int = 3,
     tests_timeout: float = TEST_TIMEOUT_S,

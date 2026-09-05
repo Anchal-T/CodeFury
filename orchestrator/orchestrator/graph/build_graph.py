@@ -15,8 +15,8 @@ from langgraph.graph import StateGraph
 from langgraph.types import Send
 
 from orchestrator.contracts import Report, Task
+from orchestrator.execution.runner import Runner
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import ZCodeRunner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.decompose import Decomposer
@@ -33,7 +33,7 @@ def build_graph(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     decomposer: Decomposer,
     retry_policy: RetryPolicy,
     test_command: list[str],

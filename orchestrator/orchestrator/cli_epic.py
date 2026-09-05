@@ -14,7 +14,7 @@ import click
 from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
-from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.execution.runner import build_runner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.graph.architect import finalize_epic, plan_epic, run_approved_leads
 from orchestrator.graph.decompose import SingleManagerDecomposer, StaticEpicDecomposer
@@ -65,10 +65,7 @@ def start(
                 "orchestrator start --epic \"...\" --domain-goal 'goal:domain'"
             )
         worktrees = WorktreeManager(repo_root, base / config.paths.workspaces)
-        runner = ZCodeRunner(
-            command=config.execution.zcode_command,
-            timeout=config.execution.worker_timeout_s,
-        )
+        runner = build_runner(config.execution)
         knowledge = KnowledgeDocs()
         domains_dir = base / config.paths.domains
         budget = BudgetTracker(store, config.budgets)
