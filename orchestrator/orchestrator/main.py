@@ -16,6 +16,7 @@ import click
 
 from orchestrator.cli_epic import approve as approve_command
 from orchestrator.cli_epic import start as start_command
+from orchestrator.cli_eval import eval_command
 from orchestrator.cli_status import (
     follow_file,
     newest_run_file,
@@ -51,6 +52,7 @@ def cli() -> None:
 
 cli.add_command(start_command)
 cli.add_command(approve_command)
+cli.add_command(eval_command)
 
 
 def _budget(store: StateStore, config) -> BudgetTracker:

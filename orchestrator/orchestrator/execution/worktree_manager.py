@@ -63,11 +63,23 @@ def find_repo_root(start: Path) -> Path:
 
 
 class WorktreeManager:
-    """Creates, commits, and merges per-worker git worktrees."""
+    """Creates, commits, and merges per-worker git worktrees.
 
-    def __init__(self, repo_root: Path, workspaces_dir: Path) -> None:
+    ``branch_prefix`` namespaces the per-task branches; eval replays (Phase
+    12) pass ``orchestrator/eval-`` so replaying a task id never clobbers a
+    real run's worker branch.
+    """
+
+    def __init__(
+        self,
+        repo_root: Path,
+        workspaces_dir: Path,
+        *,
+        branch_prefix: str = _BRANCH_PREFIX,
+    ) -> None:
         self.repo_root = repo_root
         self.workspaces_dir = workspaces_dir
+        self.branch_prefix = branch_prefix
 
     def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         try:
@@ -90,7 +102,7 @@ class WorktreeManager:
         return proc.stdout
 
     def branch_name(self, worker_id: str) -> str:
-        return f"{_BRANCH_PREFIX}{sanitize_worker_id(worker_id)}"
+        return f"{self.branch_prefix}{sanitize_worker_id(worker_id)}"
 
     def changed_files(self, worker_id: str) -> list[str]:
         """Files the worker branch changed relative to where it was cut.
@@ -142,6 +154,20 @@ class WorktreeManager:
         proc = self._git(["worktree", "add", str(path), "-b", branch], cwd=self.repo_root)
         self._require(proc, f"worktree add {path}")
         return path
+
+    def remove(self, worker_id: str) -> None:
+        """Best-effort removal of a worktree and its branch (eval cleanup).
+
+        Tolerates an already-gone worktree or branch so replay cleanup never
+        turns into its own failure mode.
+        """
+        path = self.worktree_path(worker_id)
+        if self._git(["worktree", "remove", "--force", str(path)], cwd=self.repo_root).returncode != 0:
+            shutil.rmtree(path, ignore_errors=True)
+        self._git(["worktree", "prune"], cwd=self.repo_root)
+        branch = self.branch_name(worker_id)
+        if self._git(["branch", "--list", branch], cwd=self.repo_root).stdout.strip():
+            self._git(["branch", "-D", branch], cwd=self.repo_root)
 
     def commit(self, worker_id: str, message: str) -> bool:
         """Stage and commit all changes in the worker's worktree.

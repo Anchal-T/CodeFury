@@ -19,7 +19,12 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure, fail-until-feedback (Phase 10 loop proof), sleep, target/content, role modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids, {prompt}-placeholder flag parsing (dev utility, not imported by the package).
 - `orchestrator/scripts/token_report.py` — per-level token burn report from a run database (Phase 8 budget tuning; dev utility).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
-- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs/recall/reindex); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; recall/reindex expose Tier-3 semantic memory; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
+- `orchestrator/orchestrator/cli_eval.py` — Phase 12 eval CLI: replays level-0 tasks from a source run database through the current pipeline into namespaced eval worktrees, prints the old-vs-new comparison, optional JSON --out.
+- `orchestrator/orchestrator/eval/__init__.py` — package marker for eval replay (Phase 12).
+- `orchestrator/orchestrator/eval/source.py` — read-only (SQLite mode=ro) snapshot of a past run: level-0 tasks + latest reports; task selection with id/limit filters.
+- `orchestrator/orchestrator/eval/replay.py` — EvalRunner: re-dispatches tasks through the current pipeline (prompts/harness/knowledge/critic) into `orchestrator/eval-`-namespaced worktrees; no merging; best-effort worktree cleanup; per-task ReplayResult.
+- `orchestrator/orchestrator/eval/compare.py` — old-vs-new comparison: per-task pass/token table, aggregate pass rates and token burn, console render + JSON export.
+- `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs/recall/reindex/eval); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; recall/reindex expose Tier-3 semantic memory; registers the Phase 4 epic commands, Phase 6 budget/logging wiring, and the Phase 12 eval command.
 - `orchestrator/orchestrator/cli_status.py` — read-only CLI helpers: task-tree renderer (orphan-safe, token display) and JSONL tailing (newest-run pick, last-N print, partial-line-safe follow loop).
 - `orchestrator/tests/test_cli_status.py` — tree rendering, newest-file selection, tail printing, follow-loop partial-line holdback tests.
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
@@ -45,12 +50,16 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/runner.py` — harness contract layer (Phase 9): Runner protocol, RunnerResult (incl. runner-reported tokens_used), agent-CLI TOKENS_USED convention, and the config→runner factory with an extensible harness registry.
 - `orchestrator/orchestrator/execution/cli_runner.py` — built-in agent-CLI harness adapter: cross-platform worker subprocess wrapper (injectable worker_command, {prompt} injection, psutil tree-kill on timeout, token attribution from output); ZCodeRunner kept as alias.
-- `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/merge, merge-base-anchored changed_files (Phase 11 critic input), repo-root discovery, MergeConflictError with conflicted-file extraction.
+- `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/merge/remove, configurable branch prefix (eval namespacing), merge-base-anchored changed_files (Phase 11 critic input), repo-root discovery, MergeConflictError with conflicted-file extraction.
 - `orchestrator/orchestrator/execution/tests_runner.py` — runs the test command inside a worktree (list-form, shell=False); timeout = failure, never an exception (split from worker.py, Phase 11).
 - `orchestrator/tests/execution/test_tests_runner.py` — test-gate tests: pass/fail outputs, exit-code-5 pass, timeout-is-failure contract.
 - `orchestrator/tests/execution/test_runner.py` — harness contract tests: token convention, RunnerResult defaults, protocol conformance, factory wiring + registry extension.
 - `orchestrator/tests/execution/test_cli_runner.py` — CLI adapter tests: prompt passing (append + {prompt} forms), exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree create/commit/merge lifecycle tests against a temp git repo, incl. typed merge-conflict errors.
+- `orchestrator/tests/eval/test_source.py` — snapshot loading, read-only enforcement (byte-identical source), id/limit selection with unknown-id naming.
+- `orchestrator/tests/eval/test_replay.py` — EvalRunner tests: replay + persistence, default worktree cleanup, keep flag, eval branch namespacing, failure-capture.
+- `orchestrator/tests/eval/test_compare.py` — comparison math, console render, JSON round trip, empty-report handling.
+- `orchestrator/tests/eval/test_cli_eval.py` — end-to-end eval CLI against a toy repo + seeded source db; source DB byte-identical; eval db separate; unknown-task-id error.
 - `orchestrator/orchestrator/memory/__init__.py` — package marker for memory tier.
 - `orchestrator/orchestrator/memory/store.py` — SQLite (WAL) state store, thread-safe with write-lock retries: tasks/reports/agents/token_usage/vector_entries, typed round-trips, parent/status queries, token_usage writers/readers + all_tasks/latest_tokens_by_task/latest_reports for the CLI; open_checkpointer() shares this one connection.
 - `orchestrator/orchestrator/memory/checkpointer.py` — async LangGraph checkpointer facade over sync SqliteSaver on StateStore's single connection.

@@ -76,3 +76,7 @@ _Avoid_: error message, retry reason (that's a Blocker; feedback is the whole bl
 **Critic** (Phase 11):
 The deterministic quality check run over each worker's committed diff and Report (test-file tampering, forbidden paths, churn sanity, BLOCKED.md inconsistency), producing `critic:`-prefixed warnings on the Report. Advisory by default; the manager's strict mode promotes warnings to blockers, feeding retry feedback.
 _Avoid_: linter, reviewer (that's a role; the critic is a heuristic pass)
+
+**Eval replay** (Phase 12):
+Re-running level-0 tasks from a saved run through the current pipeline (current prompts, harness, knowledge, critic) and comparing pass rates and token burn against the source reports — the regression harness for prompt/config/self-improvement changes. Read-only against the source database; replay worktrees and branches are namespaced (`orchestrator/eval-`) and never merged.
+_Avoid_: benchmark (that implies a fixed suite), test run (that's the per-worktree gate)

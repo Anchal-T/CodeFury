@@ -49,6 +49,33 @@ def test_create_makes_worktree_and_branch(manager: WorktreeManager, git_repo: Pa
     assert str(path) in _git(["worktree", "list"], cwd=git_repo)
 
 
+def test_branch_prefix_namespaces_eval_branches(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """Phase 12: eval replays reuse task ids — a custom branch prefix keeps
+    their branches from clobbering real worker branches."""
+    eval_manager = WorktreeManager(
+        git_repo, tmp_path / "eval-ws", branch_prefix="orchestrator/eval-"
+    )
+    path = eval_manager.create("w1")
+    assert path.is_dir()
+    assert "orchestrator/eval-w1" in _git(["branch", "--list"], cwd=git_repo)
+    assert "orchestrator/worker-w1" not in _git(["branch", "--list"], cwd=git_repo)
+
+
+def test_remove_clears_worktree_and_branch(
+    manager: WorktreeManager, git_repo: Path
+) -> None:
+    """Phase 12 eval cleanup: remove() takes the worktree and its branch
+    down so replays of the same id stay hermetic."""
+    path = manager.create("w1")
+    (path / "feature.txt").write_text("x\n", encoding="utf-8")
+    manager.commit("w1", "worker change")
+    manager.remove("w1")
+    assert not path.exists()
+    assert "orchestrator/worker-w1" not in _git(["branch", "--list"], cwd=git_repo)
+
+
 def test_changed_files_lists_worker_changes(
     manager: WorktreeManager, git_repo: Path
 ) -> None:
