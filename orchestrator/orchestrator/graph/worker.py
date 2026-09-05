@@ -8,60 +8,26 @@ manager are all injected, so the loop is unit-testable without a real LLM.
 from __future__ import annotations
 
 import asyncio
-import subprocess
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orchestrator.config import PYTEST_NO_TESTS_EXIT_CODE
 from orchestrator.contracts import Report, Task
 from orchestrator.execution.runner import Runner, RunnerResult
+from orchestrator.execution.tests_runner import TEST_TIMEOUT_S, TestResult, run_tests
 from orchestrator.execution.worktree_manager import WorktreeManager
 from orchestrator.governance.budget import BudgetTracker
+from orchestrator.graph.critic import criticize
 from orchestrator.memory.store import StateStore
 from orchestrator.prompts import build_worker_prompt
 
 if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
     from orchestrator.logging_setup import RunLogger
     from orchestrator.memory.knowledge_docs import KnowledgeDocs
     from orchestrator.memory.vector import VectorMemory
 
-TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
-
-
-@dataclass
-class TestResult:
-    passed: bool
-    output: str
-    timed_out: bool = False
-
-
-def run_tests(test_command: list[str], cwd: Path, timeout: float = TEST_TIMEOUT_S) -> TestResult:
-    """Run the test command in the worktree (list-form, shell=False).
-
-    A timeout is a test failure, not an exception: the caller must always
-    get a TestResult so a Report can be persisted.
-    """
-    try:
-        proc = subprocess.run(
-            test_command,
-            cwd=str(cwd),
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return TestResult(
-            passed=False,
-            output=f"tests timed out after {timeout:.0f}s",
-            timed_out=True,
-        )
-    output = (proc.stdout or "") + (proc.stderr or "")
-    passed = proc.returncode in (0, PYTEST_NO_TESTS_EXIT_CODE)
-    return TestResult(passed=passed, output=output.strip())
 
 
 def _summarize(result: RunnerResult, tests: TestResult) -> str:
@@ -105,6 +71,7 @@ def run_worker_task(
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
@@ -134,6 +101,7 @@ def run_worker_task(
             budget=budget,
             runlog=runlog,
             memory=memory,
+            critic=critic,
         )
     except Exception as exc:
         report = Report(
@@ -164,6 +132,7 @@ def _run_pipeline(
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> Report:
     if runlog is not None:
         runlog.event("task_start", task_id=task.id, level=task.level)
@@ -207,6 +176,24 @@ def _run_pipeline(
             tokens_used=tokens_used,
             blockers=blockers,
         )
+        if critic is not None and critic.enabled:
+            # Critique after the commit so the merge-base diff exists; git
+            # trouble skips the diff heuristics (fail-soft, never blocks).
+            try:
+                changed_files: list[str] | None = worktrees.changed_files(task.id)
+            except RuntimeError:
+                changed_files = None
+            if changed_files is not None:
+                critique = criticize(
+                    report,
+                    changed_files=changed_files,
+                    blocked=(worktree / "BLOCKED.md").is_file(),
+                    config=critic,
+                )
+                if critique.warnings:
+                    report = report.model_copy(update={"warnings": critique.warnings})
+                    if runlog is not None:
+                        runlog.event("critic", task_id=task.id, warnings=critique.warnings)
         store.save_report(report)
         task.status = "failed" if blockers else "review"
         store.save_task(task)
@@ -235,6 +222,7 @@ def make_worker_node(
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
@@ -286,6 +274,7 @@ def make_worker_node(
                 budget=budget,
                 runlog=runlog,
                 memory=memory,
+                critic=critic,
             )
         return {
             "reports": [report.model_dump()],

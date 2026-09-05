@@ -701,6 +701,65 @@ def test_runner_reported_tokens_win_over_output_marker(pipeline) -> None:
     assert budget.remaining(0) == 700
 
 
+def test_critic_flags_test_tampering_and_persists_warnings(pipeline) -> None:
+    """Phase 11: the critic runs after the worker commits; its warnings ride
+    on the (single) persisted Report."""
+    from orchestrator.config import CriticConfig
+
+    store, worktrees, _, passing_tests, _ = pipeline
+
+    class TestTamperingRunner:
+        def run(self, prompt: str, cwd: Path) -> RunnerResult:
+            tests_dir = cwd / "tests"
+            tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "test_game.py").write_text(
+                "def test_x():\n    assert True\n", encoding="utf-8"
+            )
+            return RunnerResult(returncode=0, stdout="ok", stderr="", timed_out=False, duration_s=0.0)
+
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=TestTamperingRunner(),  # type: ignore[arg-type]
+        test_command=passing_tests,
+        critic=CriticConfig(),
+    )
+
+    assert any("test files" in w for w in report.warnings)
+    stored = store.latest_report("t-42")
+    assert stored is not None
+    assert stored.warnings == report.warnings
+
+
+def test_critic_disabled_leaves_warnings_empty(pipeline) -> None:
+    from orchestrator.config import CriticConfig
+
+    store, worktrees, _, passing_tests, _ = pipeline
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=AgentCliRunner(command=[__import__("sys").executable, "-c", "pass"]),
+        test_command=passing_tests,
+        critic=CriticConfig(enabled=False),
+    )
+    assert report.warnings == []
+
+
+def test_without_critic_reports_carry_no_warnings(pipeline) -> None:
+    """Existing callers pass no critic at all — Reports stay warning-free."""
+    store, worktrees, runner, passing_tests, _ = pipeline
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,
+        test_command=passing_tests,
+    )
+    assert report.warnings == []
+
+
 def test_worker_node_threads_budget_gate_to_pipeline(
     git_repo: Path, tmp_path: Path, python_bin: str
 ) -> None:

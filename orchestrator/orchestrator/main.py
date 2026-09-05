@@ -106,6 +106,7 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
             budget=_budget(store, config),
             runlog=runlog,
             memory=memory,
+            critic=config.critic,
         )
     click.echo(
         f"\n[report] task={report.task_id} agent={report.agent}\n"
@@ -164,6 +165,7 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
             budget=_budget(store, config),
             runlog=runlog,
             memory=memory,
+            critic=config.critic,
         )
         click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
         result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))
@@ -235,6 +237,7 @@ def lead(
             budget=_budget(store, config),
             runlog=runlog,
             memory=memory,
+            critic=config.critic,
         )
         click.echo(
             f"[lead] task {parent.id} → {len(manager_goals)} manager(s), "

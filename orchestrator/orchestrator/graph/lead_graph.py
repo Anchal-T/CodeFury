@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
@@ -31,10 +32,14 @@ from orchestrator.graph.outcome_recorder import (
     RecordRequest,
 )
 from orchestrator.graph.state import LeadState
-from orchestrator.graph.worker import make_worker_node, run_tests
+from orchestrator.execution.tests_runner import run_tests
+from orchestrator.graph.worker import make_worker_node
 from orchestrator.memory.knowledge_docs import KnowledgeDocs
 from orchestrator.memory.store import StateStore
 from orchestrator.memory.vector import recall_context
+
+if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
 
 
 def _attempts_delta(new_recons: list[dict]) -> dict[str, int]:
@@ -70,6 +75,7 @@ def build_lead_graph(
     budget=None,
     runlog=None,
     memory=None,
+    critic: "CriticConfig | None" = None,
 ):
     """Assemble and compile Architect-less lead → managers → workers graph.
 
@@ -77,7 +83,8 @@ def build_lead_graph(
     ``StateStore.checkpointer()``) makes the whole run — including the nested
     manager/worker subgraphs — resumable under a stable
     ``thread_id = lead:<task id>``; None keeps runs non-persistent.
-    ``budget`` + ``runlog`` thread Phase 6 governance through every level.
+    ``budget`` + ``runlog`` thread Phase 6 governance through every level;
+    ``critic`` (Phase 11) the deterministic report critic + strict policy.
     """
     knowledge = knowledge or KnowledgeDocs()
     retry_policy = retry_policy or RetryPolicy()
@@ -100,6 +107,7 @@ def build_lead_graph(
         budget=budget,
         runlog=runlog,
         memory=memory,
+        critic=critic,
     )
     reconcile_worker = make_worker_node(
         store=store,
@@ -114,6 +122,7 @@ def build_lead_graph(
         budget=budget,
         runlog=runlog,
         memory=memory,
+        critic=critic,
     )
 
     recorder = OutcomeRecorder(

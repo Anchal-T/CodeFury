@@ -76,6 +76,28 @@ class RetryConfig:
     max_reconcile_attempts: int = 1
 
 
+#: Paths a worker must never touch; matched with fnmatch against
+#: repo-relative paths (Phase 11 critic).
+DEFAULT_FORBIDDEN_GLOBS = [".env*", "*secret*", "config.yaml"]
+
+
+@dataclass
+class CriticConfig:
+    """Deterministic report-critic settings (Phase 11).
+
+    ``enabled`` runs the heuristics after each worker commit (warnings land
+    on the Report); ``strict`` makes the manager promote warnings to
+    blockers so they route into retry-with-feedback instead of merging.
+    """
+
+    enabled: bool = True
+    strict: bool = False
+    max_changed_files: int = 20
+    forbidden_globs: list[str] = field(
+        default_factory=lambda: list(DEFAULT_FORBIDDEN_GLOBS)
+    )
+
+
 @dataclass
 class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
@@ -83,6 +105,7 @@ class Config:
     concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
     retries: RetryConfig = field(default_factory=RetryConfig)
     budgets: BudgetsConfig = field(default_factory=BudgetsConfig)
+    critic: CriticConfig = field(default_factory=CriticConfig)
 
 
 def _as_list(value: object) -> list[str] | None:
@@ -163,6 +186,7 @@ def load_config(path: Path | None = None) -> Config:
     conc_raw = _section("concurrency")
     retries_raw = _section("retries")
     budgets_raw = _section("budgets")
+    critic_raw = _section("critic")
 
     config = Config(
         paths=PathsConfig(
@@ -199,6 +223,16 @@ def load_config(path: Path | None = None) -> Config:
                 budgets_raw, "architect_tokens", BudgetsConfig.architect_tokens
             ),
         ),
+        critic=CriticConfig(
+            enabled=bool(critic_raw.get("enabled", CriticConfig.enabled)),
+            strict=bool(critic_raw.get("strict", CriticConfig.strict)),
+            max_changed_files=int(
+                critic_raw.get("max_changed_files", CriticConfig.max_changed_files)
+            ),
+            forbidden_globs=[
+                str(glob) for glob in critic_raw.get("forbidden_globs", DEFAULT_FORBIDDEN_GLOBS)
+            ],
+        ),
     )
     if config.concurrency.max_workers < 1:
         raise ValueError(
@@ -209,6 +243,11 @@ def load_config(path: Path | None = None) -> Config:
         raise ValueError(
             "retries.max_reconcile_attempts must be >= 0, got "
             f"{config.retries.max_reconcile_attempts}"
+        )
+    if config.critic.max_changed_files < 1:
+        raise ValueError(
+            "critic.max_changed_files must be >= 1, got "
+            f"{config.critic.max_changed_files} (every real change would be churn)"
         )
     env_cmd = _new_or_legacy(
         os.environ.get("WORKER_CMD"),

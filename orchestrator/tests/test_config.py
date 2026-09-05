@@ -220,6 +220,45 @@ def test_empty_worker_command_falls_back_to_legacy_key(tmp_path: Path) -> None:
     assert config.execution.worker_command == ["legacy", "agent"]
 
 
+def test_critic_section_defaults_when_missing() -> None:
+    config = load_config(Path("does-not-exist.yaml"))
+    assert config.critic.enabled is True
+    assert config.critic.strict is False
+    assert config.critic.max_changed_files == 20
+    assert config.critic.forbidden_globs, "sane forbidden-path defaults must exist"
+
+
+def test_critic_section_loads_overrides(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "critic:\n"
+        "  enabled: true\n"
+        "  strict: true\n"
+        "  max_changed_files: 5\n"
+        "  forbidden_globs: ['.env*', '*.pem']\n",
+        encoding="utf-8",
+    )
+    critic = load_config(config_file).critic
+    assert critic.enabled is True
+    assert critic.strict is True
+    assert critic.max_changed_files == 5
+    assert critic.forbidden_globs == [".env*", "*.pem"]
+
+
+def test_critic_can_be_disabled(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("critic:\n  enabled: false\n", encoding="utf-8")
+    assert load_config(config_file).critic.enabled is False
+
+
+def test_critic_invalid_max_changed_files_rejected(tmp_path: Path) -> None:
+    """A cap below 1 would flag every real change as churn — reject at load."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("critic:\n  max_changed_files: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="max_changed_files"):
+        load_config(config_file)
+
+
 def test_harness_selects_backend(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("execution:\n  harness: cli\n", encoding="utf-8")

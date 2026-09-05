@@ -17,6 +17,16 @@ retries:
   max_manager_escalations: 1
   max_reconcile_attempts: 1  # Domain Lead reconciliation dispatches per conflict
 
+critic:
+  # Deterministic report critic (Phase 11): heuristics over each worker's
+  # diff (test-file tampering, forbidden paths, churn sanity, BLOCKED.md
+  # inconsistencies). Warnings ride on the Report; strict=true makes the
+  # manager promote them to blockers, routing into retry-with-feedback.
+  enabled: true
+  strict: false
+  max_changed_files: 20
+  forbidden_globs: ['.env*', '*secret*', 'config.yaml']
+
 execution:
   # Harness agnostic (Phase 9): `harness` picks the runner backend (cli is
   # the built-in adapter) and `worker_command` is its injectable argv.

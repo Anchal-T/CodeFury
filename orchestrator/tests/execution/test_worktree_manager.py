@@ -49,6 +49,39 @@ def test_create_makes_worktree_and_branch(manager: WorktreeManager, git_repo: Pa
     assert str(path) in _git(["worktree", "list"], cwd=git_repo)
 
 
+def test_changed_files_lists_worker_changes(
+    manager: WorktreeManager, git_repo: Path
+) -> None:
+    """Phase 11 critic input: the files the worker branch changed relative to
+    where it was cut (Phase 11)."""
+    path = manager.create("w1")
+    (path / "feature.py").write_text("x\n", encoding="utf-8")
+    (path / "src").mkdir()
+    (path / "src" / "app.py").write_text("y\n", encoding="utf-8")
+    manager.commit("w1", "worker change")
+    assert manager.changed_files("w1") == ["feature.py", "src/app.py"]
+
+
+def test_changed_files_empty_for_untouched_worktree(manager: WorktreeManager) -> None:
+    manager.create("w1")
+    assert manager.commit("w1", "nothing to commit") is False
+    assert manager.changed_files("w1") == []
+
+
+def test_changed_files_survives_base_movement(
+    manager: WorktreeManager, git_repo: Path
+) -> None:
+    """Other workers merging while this one runs must not pollute the diff —
+    the comparison anchors at the merge-base, not at current HEAD."""
+    path = manager.create("w1")
+    (path / "worker.txt").write_text("worker\n", encoding="utf-8")
+    manager.commit("w1", "worker change")
+    (git_repo / "base.txt").write_text("moved on\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=git_repo)
+    _git(["commit", "-m", "base moves"], cwd=git_repo)
+    assert manager.changed_files("w1") == ["worker.txt"]
+
+
 def test_create_is_idempotent_for_retries(manager: WorktreeManager) -> None:
     """A retried task id must get a fresh worktree, not a collision error."""
     first = manager.create("w5")

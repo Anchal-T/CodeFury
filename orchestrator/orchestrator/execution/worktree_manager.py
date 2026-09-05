@@ -92,6 +92,26 @@ class WorktreeManager:
     def branch_name(self, worker_id: str) -> str:
         return f"{_BRANCH_PREFIX}{sanitize_worker_id(worker_id)}"
 
+    def changed_files(self, worker_id: str) -> list[str]:
+        """Files the worker branch changed relative to where it was cut.
+
+        Anchored at the merge-base, so merges by other workers after this
+        branch was cut never pollute the diff. Empty when the branch has no
+        commits of its own (nothing was committed).
+        """
+        branch = self.branch_name(worker_id)
+        base = self._require(
+            self._git(["merge-base", "HEAD", branch], cwd=self.repo_root),
+            "merge-base",
+        ).strip()
+        if not base:
+            return []
+        output = self._require(
+            self._git(["diff", "--name-only", f"{base}..{branch}"], cwd=self.repo_root),
+            "diff --name-only",
+        )
+        return [line.strip() for line in output.splitlines() if line.strip()]
+
     def worktree_path(self, worker_id: str) -> Path:
         return self.workspaces_dir / f"worker_{sanitize_worker_id(worker_id)}"
 

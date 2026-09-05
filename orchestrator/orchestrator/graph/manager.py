@@ -22,6 +22,7 @@ from orchestrator.graph.outcome_recorder import (
 from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
     from orchestrator.logging_setup import RunLogger
     from orchestrator.memory.vector import VectorMemory
 
@@ -46,6 +47,7 @@ def review_reports(
     retry_policy: RetryPolicy,
     store: StateStore,
     runlog: "RunLogger | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> ReviewDecision:
     """Review the latest report per worker task and act on it.
 
@@ -53,7 +55,10 @@ def review_reports(
     a merge that conflicts fails the task without retry (conflict resolution
     is Domain Lead territory, Phase 3); anything failed within budget goes
     back to pending for another dispatch; past the cap it fails for good.
-    ``runlog`` receives merge/retry events (Phase 6).
+    ``runlog`` receives merge/retry events (Phase 6). ``critic`` (Phase 11)
+    carries the critic policy: in strict mode the Report's critic warnings
+    are promoted to blockers, so a tampering-looking report routes into the
+    Phase 10 retry-with-feedback path instead of merging.
     """
     decision = ReviewDecision()
     latest_by_task = {report.task_id: report for report in reports}
@@ -61,6 +66,11 @@ def review_reports(
         report = latest_by_task.get(task.id)
         if report is None:
             continue  # still running, nothing to review yet
+
+        if critic is not None and critic.strict and report.warnings:
+            report = report.model_copy(
+                update={"blockers": [*report.blockers, *report.warnings]}
+            )
 
         if report.tests_passed and not report.blockers:
             try:

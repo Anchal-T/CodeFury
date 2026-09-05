@@ -26,7 +26,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries/budgets) with WORKER_CMD env override (legacy ZCODE_CMD accepted), execution.harness selection, and concurrency/budget validation.
 - `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section and (on retries, Phase 10) the previous-attempt feedback block.
-- `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
+- `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels; Report carries critic warnings (Phase 11) plus the CONFLICT_BLOCKER_PREFIX convention.
 - `orchestrator/orchestrator/logging_setup.py` — thread-safe JSONL RunLogger; setup_logging opens logs/run_<UTC ts>.jsonl per invocation.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
 - `orchestrator/orchestrator/graph/architect.py` — Level 3 epic planning with the pending_approval gate, epic finalization + PROJECT_STATE.md, and the checkpoint-aware approved-leads resume driver (stable thread ids).
@@ -34,16 +34,20 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol (Domain/Epic specializations) with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
-- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions with previous-attempt feedback attached to retry dispatches (Phase 10), conflict handling, parent finalization with post-merge integration tests.
+- `orchestrator/orchestrator/graph/critic.py` — deterministic report critic (Phase 11): fnmatch heuristics over the worker's diff and Report (test-file tampering, forbidden paths, churn cap, empty-diff/empty-summary, BLOCKED.md inconsistency); pure, 'critic:'-prefixed warnings.
+- `orchestrator/tests/graph/test_critic.py` — critic heuristic tests: one per rule, negatives, prefix contract.
+- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions with previous-attempt feedback attached to retry dispatches (Phase 10), strict critic-warning promotion (Phase 11), conflict handling, parent finalization with post-merge integration tests.
 - `orchestrator/orchestrator/graph/feedback.py` — retry feedback builder (Phase 10): renders a failed Report into a capped 'Previous attempt feedback' prompt block (blockers, summary); empty when nothing actionable.
 - `orchestrator/tests/graph/test_feedback.py` — feedback builder tests: content, empty case, hard cap with truncation marker, cap degenerate case.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): harness-agnostic Runner injection, token attribution (runner-reported or output convention), budget-gated dispatch, Tier-1 knowledge + retry-feedback injection into prompts, task_start/task_end events, async node factory with concurrency cap.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): harness-agnostic Runner injection, token attribution (runner-reported or output convention), budget-gated dispatch, Tier-1 knowledge + retry-feedback injection into prompts, post-commit critic warnings (Phase 11), task_start/task_end events, async node factory with concurrency cap.
 - `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, Tier-1 knowledge + semantic-recall planning seam + checkpoint wiring.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.
 - `orchestrator/orchestrator/execution/runner.py` — harness contract layer (Phase 9): Runner protocol, RunnerResult (incl. runner-reported tokens_used), agent-CLI TOKENS_USED convention, and the config→runner factory with an extensible harness registry.
 - `orchestrator/orchestrator/execution/cli_runner.py` — built-in agent-CLI harness adapter: cross-platform worker subprocess wrapper (injectable worker_command, {prompt} injection, psutil tree-kill on timeout, token attribution from output); ZCodeRunner kept as alias.
-- `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/merge, repo-root discovery, MergeConflictError with conflicted-file extraction.
+- `orchestrator/orchestrator/execution/worktree_manager.py` — worktree create/commit/merge, merge-base-anchored changed_files (Phase 11 critic input), repo-root discovery, MergeConflictError with conflicted-file extraction.
+- `orchestrator/orchestrator/execution/tests_runner.py` — runs the test command inside a worktree (list-form, shell=False); timeout = failure, never an exception (split from worker.py, Phase 11).
+- `orchestrator/tests/execution/test_tests_runner.py` — test-gate tests: pass/fail outputs, exit-code-5 pass, timeout-is-failure contract.
 - `orchestrator/tests/execution/test_runner.py` — harness contract tests: token convention, RunnerResult defaults, protocol conformance, factory wiring + registry extension.
 - `orchestrator/tests/execution/test_cli_runner.py` — CLI adapter tests: prompt passing (append + {prompt} forms), exit codes, timeout tree-kill.
 - `orchestrator/tests/execution/test_worktree_manager.py` — worktree create/commit/merge lifecycle tests against a temp git repo, incl. typed merge-conflict errors.

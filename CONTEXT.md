@@ -72,3 +72,7 @@ The harness contract: anything with `run(prompt, cwd) -> RunnerResult`. RunnerRe
 **Retry feedback** (Phase 10):
 The capped `Previous attempt feedback` prompt block built from a failed attempt's Report (blockers, summary tail) and injected into the retry prompt, so a re-dispatch starts from what went wrong instead of repeating it. Built by graph/feedback.py; empty when the Report has nothing actionable.
 _Avoid_: error message, retry reason (that's a Blocker; feedback is the whole block)
+
+**Critic** (Phase 11):
+The deterministic quality check run over each worker's committed diff and Report (test-file tampering, forbidden paths, churn sanity, BLOCKED.md inconsistency), producing `critic:`-prefixed warnings on the Report. Advisory by default; the manager's strict mode promotes warnings to blockers, feeding retry feedback.
+_Avoid_: linter, reviewer (that's a role; the critic is a heuristic pass)

@@ -87,6 +87,7 @@ def start(
                 budget=budget,
                 runlog=runlog,
                 memory=memory,
+                critic=config.critic,
             )
 
         with runlog:
