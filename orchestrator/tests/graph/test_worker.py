@@ -361,6 +361,54 @@ def test_pipeline_prepends_knowledge_context_to_prompt(pipeline) -> None:
     assert prompt.index("auth module merged") < prompt.index("Task (JSON)")
 
 
+def test_pipeline_includes_retry_feedback_in_prompt(pipeline) -> None:
+    """Phase 10: retry feedback reaches the prompt ahead of the Task JSON."""
+    store, worktrees, _, passing_tests, _ = pipeline
+    runner = RecordingRunner()
+
+    report = run_worker_task(
+        make_task(),
+        store=store,
+        worktrees=worktrees,
+        runner=runner,  # type: ignore[arg-type]
+        test_command=passing_tests,
+        feedback="## Previous attempt feedback\n\n- tests failed in worktree",
+    )
+
+    assert report.tests_passed
+    prompt = runner.prompts[0]
+    assert "Previous attempt feedback" in prompt
+    assert prompt.index("Previous attempt feedback") < prompt.index("Task (JSON)")
+
+
+def test_worker_node_threads_state_feedback(
+    git_repo: Path, tmp_path: Path, python_bin: str
+) -> None:
+    """The graph's retry dispatch carries `feedback` in the Send payload; the
+    worker node must hand it to the pipeline (Phase 10 wiring)."""
+    store = StateStore(tmp_path / "data" / "orchestrator.db")
+    store.init_schema()
+    try:
+        worktrees = WorktreeManager(git_repo, git_repo / "workspaces")
+        runner = RecordingRunner()
+        node = make_worker_node(
+            store=store,
+            worktrees=worktrees,
+            runner=runner,  # type: ignore[arg-type]
+            test_command=[python_bin, "-c", "print('tests ok')"],
+            max_workers=2,
+        )
+        task = make_task()
+        store.save_task(task)
+
+        update = asyncio.run(node({"task": task.model_dump(), "feedback": "fix the flub"}))
+
+        assert update["reports"][0]["tests_passed"] is True
+        assert "fix the flub" in runner.prompts[0]
+    finally:
+        store.close()
+
+
 def test_worker_node_reads_latest_domain_repo_map(
     git_repo: Path, tmp_path: Path, python_bin: str
 ) -> None:

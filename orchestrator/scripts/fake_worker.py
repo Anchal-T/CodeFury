@@ -11,6 +11,11 @@ the repo root — the runner executes with cwd set to the worktree):
 
 Modes (environment variables):
     FAKE_WORKER_FAIL=1              simulate a failing worker (retry demos)
+    FAKE_WORKER_FAIL_UNTIL_FEEDBACK=1
+                                    fail every prompt lacking the Phase 10
+                                    retry-feedback marker ('Previous attempt
+                                    feedback') — proves the retry loop feeds
+                                    back; once the block appears, succeeds
     FAKE_WORKER_SLEEP_S=<seconds>   sleep before doing the work — lets demos
                                     and kill/resume tests catch a run
                                     mid-flight
@@ -43,6 +48,15 @@ def main() -> int:
     prompt = sys.argv[-1].removeprefix("--prompt=") if len(sys.argv) > 1 else ""
     if os.environ.get("FAKE_WORKER_FAIL") == "1":
         print("fake worker: simulated failure (FAKE_WORKER_FAIL=1)", file=sys.stderr)
+        return 1
+    if (
+        os.environ.get("FAKE_WORKER_FAIL_UNTIL_FEEDBACK") == "1"
+        and "Previous attempt feedback" not in prompt
+    ):
+        print(
+            "fake worker: first-attempt failure (no retry feedback in prompt)",
+            file=sys.stderr,
+        )
         return 1
 
     sleep_s = float(os.environ.get("FAKE_WORKER_SLEEP_S", "0"))

@@ -13,6 +13,7 @@ from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
 from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
 from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX
 from orchestrator.governance.retry_policy import RetryPolicy
+from orchestrator.graph.feedback import build_feedback
 from orchestrator.graph.outcome_recorder import (
     IntegrationGate,
     OutcomeRecorder,
@@ -89,9 +90,15 @@ def review_reports(
         if retry_policy.can_retry(task.id, attempts.get(task.id, 0)):
             task.status = "pending"
             store.save_task(task)
-            decision.retry.append(task.model_dump())
+            feedback = build_feedback(report)
+            decision.retry.append({**task.model_dump(), "feedback": feedback})
             if runlog is not None:
-                runlog.event("retry", task_id=task.id, attempt=attempts.get(task.id, 0) + 1)
+                runlog.event(
+                    "retry",
+                    task_id=task.id,
+                    attempt=attempts.get(task.id, 0) + 1,
+                    with_feedback=bool(feedback),
+                )
         else:
             decision.failed.append(task.id)
             decision.blockers.append(f"worker {task.id} exhausted retries")

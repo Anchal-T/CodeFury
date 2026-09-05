@@ -153,7 +153,14 @@ def build_graph(
             return END
         attempts = state.get("attempts", {})
         return [
-            Send("worker", {"task": task, "attempt": attempts.get(task["id"], 0) + 1})
+            Send(
+                "worker",
+                {
+                    "task": task,
+                    "attempt": attempts.get(task["id"], 0) + 1,
+                    "feedback": task.get("feedback", ""),
+                },
+            )
             for task in batch
         ]
 

@@ -16,7 +16,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/logs/` — JSONL run logs, one run_<ts>.jsonl per invocation (gitignored).
 - `orchestrator/pytest.ini` — scopes pytest collection to tests/ (keeps demo worktrees out).
 - `orchestrator/requirements.txt` — dependencies (langgraph, pydantic, pyyaml, psutil, click, fastembed, numpy).
-- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure/sleep/target/content modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids (dev utility, not imported by the package).
+- `orchestrator/scripts/fake_worker.py` — fake worker command for demos/manual testing: failure, fail-until-feedback (Phase 10 loop proof), sleep, target/content, role modes, TOKENS_USED reporting, reconciler self-labeling from '-reconcile-' prompt ids, {prompt}-placeholder flag parsing (dev utility, not imported by the package).
 - `orchestrator/scripts/token_report.py` — per-level token burn report from a run database (Phase 8 budget tuning; dev utility).
 - `orchestrator/orchestrator/__init__.py` — package marker + version.
 - `orchestrator/orchestrator/main.py` — CLI entrypoint (run/manage/lead/status/logs/recall/reindex); run drives Phase 1, manage the Phase 2 graph, lead the Phase 3 graph; status prints the SQLite task tree; logs tails/follows the JSONL run log; recall/reindex expose Tier-3 semantic memory; registers the Phase 4 epic commands and Phase 6 budget/logging wiring.
@@ -25,7 +25,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/orchestrator/cli_epic.py` — Phase 4 epic CLI commands (start/approve): epic planning, duplicate-id rejection, approved-leads resume, pending_approval gate.
 - `orchestrator/orchestrator/__main__.py` — enables `python -m orchestrator`.
 - `orchestrator/orchestrator/config.py` — typed config.yaml loader (paths/execution/concurrency/retries/budgets) with WORKER_CMD env override (legacy ZCODE_CMD accepted), execution.harness selection, and concurrency/budget validation.
-- `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section.
+- `orchestrator/orchestrator/prompts.py` — builds the worker prompt from a Task contract, prepending the latest Tier-1 knowledge section and (on retries, Phase 10) the previous-attempt feedback block.
 - `orchestrator/orchestrator/contracts.py` — Task/Report pydantic models (incl. pending_approval status), the only objects crossing levels, plus the CONFLICT_BLOCKER_PREFIX convention.
 - `orchestrator/orchestrator/logging_setup.py` — thread-safe JSONL RunLogger; setup_logging opens logs/run_<UTC ts>.jsonl per invocation.
 - `orchestrator/orchestrator/graph/__init__.py` — package marker for graph nodes.
@@ -34,8 +34,10 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `orchestrator/tests/graph/test_domain_lead.py` — lead_review tests: reconcile-once cap, escalation rules, recon merge outcomes.
 - `orchestrator/orchestrator/graph/state.py` — OrchestratorState + LeadState schemas with fan-out-safe reducers (append lists, max-merge attempts).
 - `orchestrator/orchestrator/graph/decompose.py` — Decomposer protocol (Domain/Epic specializations) with planning-context seam; Static* decomposers (levels 0/1/2) and Single* defaults.
-- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions, conflict handling, parent finalization with post-merge integration tests.
-- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): harness-agnostic Runner injection, token attribution (runner-reported or output convention), budget-gated dispatch, task_start/task_end events, async node factory with concurrency cap and Tier-1 knowledge injection into prompts.
+- `orchestrator/orchestrator/graph/manager.py` — Level 1 review logic: merge gating, retry decisions with previous-attempt feedback attached to retry dispatches (Phase 10), conflict handling, parent finalization with post-merge integration tests.
+- `orchestrator/orchestrator/graph/feedback.py` — retry feedback builder (Phase 10): renders a failed Report into a capped 'Previous attempt feedback' prompt block (blockers, summary); empty when nothing actionable.
+- `orchestrator/tests/graph/test_feedback.py` — feedback builder tests: content, empty case, hard cap with truncation marker, cap degenerate case.
+- `orchestrator/orchestrator/graph/worker.py` — Level 0 pipeline (run_worker_task): harness-agnostic Runner injection, token attribution (runner-reported or output convention), budget-gated dispatch, Tier-1 knowledge + retry-feedback injection into prompts, task_start/task_end events, async node factory with concurrency cap.
 - `orchestrator/orchestrator/graph/lead_graph.py` — Level 2 lead StateGraph: nested manager subgraph via Send, capped reconciliation, repo_map.md append, Tier-1 knowledge + semantic-recall planning seam + checkpoint wiring.
 - `orchestrator/orchestrator/graph/build_graph.py` — wires Manager/Worker into one LangGraph StateGraph with Send fan-out, retry routing, per-manager summaries, and Tier-1 knowledge wiring.
 - `orchestrator/orchestrator/execution/__init__.py` — package marker for execution layer.

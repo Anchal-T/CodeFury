@@ -101,6 +101,7 @@ def run_worker_task(
     test_command: list[str],
     tests_timeout: float = TEST_TIMEOUT_S,
     knowledge_context: str = "",
+    feedback: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
@@ -111,11 +112,12 @@ def run_worker_task(
     Report is ALWAYS saved — even when the pipeline itself crashes — so a
     task is never left in_progress with no trace of what happened.
     ``knowledge_context`` carries the latest Tier-1 memory section (plan §9
-    Phase 5) into the worker prompt. ``budget`` (Phase 6) gates the dispatch:
-    an exhausted level budget short-circuits with a blocker Report before any
-    worktree or subprocess exists. ``runlog`` receives task_start/task_end
-    events for the JSONL run log (Phase 6). ``memory`` (Phase 7) indexes the
-    report summary into Tier-3 semantic memory.
+    Phase 5) into the worker prompt. ``feedback`` (Phase 10) carries the
+    previous attempt's feedback block on retries. ``budget`` (Phase 6) gates
+    the dispatch: an exhausted level budget short-circuits with a blocker
+    Report before any worktree or subprocess exists. ``runlog`` receives
+    task_start/task_end events for the JSONL run log. ``memory`` (Phase 7)
+    indexes the report summary into Tier-3 semantic memory.
     """
     task.status = "in_progress"
     store.save_task(task)
@@ -128,6 +130,7 @@ def run_worker_task(
             test_command=test_command,
             tests_timeout=tests_timeout,
             knowledge_context=knowledge_context,
+            feedback=feedback,
             budget=budget,
             runlog=runlog,
             memory=memory,
@@ -157,6 +160,7 @@ def _run_pipeline(
     test_command: list[str],
     tests_timeout: float,
     knowledge_context: str = "",
+    feedback: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
@@ -184,7 +188,8 @@ def _run_pipeline(
             return report
 
         worktree = worktrees.create(task.id)
-        result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
+        prompt = build_worker_prompt(task, knowledge_context, feedback)
+        result = runner.run(prompt, cwd=worktree)
         tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
         worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
 
@@ -233,6 +238,10 @@ def make_worker_node(
 ):
     """Build the async LangGraph worker node with a concurrency cap.
 
+    The node's state input is the Send payload: ``task`` (serialized Task),
+    ``attempt`` (1-based dispatch count), and ``feedback`` (Phase 10: the
+    previous attempt's feedback block on retries, "" on first dispatch).
+
     The semaphore enforces config concurrency.max_workers (plan §4): never
     more worker subprocesses than the budget allows, real parallelism below
     it. Pass an injected ``semaphore`` to share one cap across graphs (the
@@ -262,6 +271,7 @@ def make_worker_node(
         task = Task.model_validate(state["task"])
         attempt = int(state.get("attempt", 1))
         knowledge_context = _context_for(task)
+        feedback = str(state.get("feedback", ""))
         async with sem:
             report = await asyncio.to_thread(
                 run_worker_task,
@@ -272,6 +282,7 @@ def make_worker_node(
                 test_command=test_command,
                 tests_timeout=tests_timeout,
                 knowledge_context=knowledge_context,
+                feedback=feedback,
                 budget=budget,
                 runlog=runlog,
                 memory=memory,

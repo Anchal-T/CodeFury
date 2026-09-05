@@ -215,6 +215,27 @@ def test_full_hierarchy_epic_runs_and_dogfoods_memory(
     assert leftover_worker_processes() == []
 
 
+def test_retry_receives_previous_attempt_feedback(
+    tmp_path: Path, python_bin: str, git_init
+) -> None:
+    """Phase 10: a worker failing its first attempt passes on retry — the
+    rebuilt prompt carries the previous attempt's feedback (the fake worker
+    only succeeds once that block appears in its prompt)."""
+    root = make_toy_repo(tmp_path, python_bin, git_init)
+    proc = run_cli(
+        root, python_bin, "manage",
+        "--goal", "feedback loop", "--sub-goal", "flaky task",
+        FAKE_WORKER_FAIL_UNTIL_FEEDBACK="1",
+    )
+    assert proc.returncode == 0, f"{proc.stderr}\n{proc.stdout}"
+    assert "final=review" in proc.stdout
+    with StateStore(root / "data" / "orchestrator.db") as store:
+        worker_reports = store.connection().execute(
+            "SELECT COUNT(*) FROM reports WHERE agent LIKE 'worker:%'"
+        ).fetchone()[0]
+    assert worker_reports == 2, "exactly one failing attempt + one feedback-fed retry"
+
+
 def test_concurrency_soak_cap_holds_under_load_and_leaves_no_zombies(
     tmp_path: Path, python_bin: str, git_init
 ) -> None:

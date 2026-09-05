@@ -68,3 +68,7 @@ _Avoid_: agent runner, executor, zcode (that's one harness, not the concept)
 
 **Runner** (Phase 9):
 The harness contract: anything with `run(prompt, cwd) -> RunnerResult`. RunnerResult carries the run's outcome plus optional runner-reported token attribution; when a backend can't report, `effective_tokens()` falls back to the agent-CLI output convention (a standalone `TOKENS_USED: <n>` stdout line, last marker wins). The built-in CLI adapter is AgentCliRunner (`execution.cli_runner.py`), driven by `execution.worker_command` where a `{prompt}` placeholder is substituted in place or the prompt is appended as the last argv token.
+
+**Retry feedback** (Phase 10):
+The capped `Previous attempt feedback` prompt block built from a failed attempt's Report (blockers, summary tail) and injected into the retry prompt, so a re-dispatch starts from what went wrong instead of repeating it. Built by graph/feedback.py; empty when the Report has nothing actionable.
+_Avoid_: error message, retry reason (that's a Blocker; feedback is the whole block)

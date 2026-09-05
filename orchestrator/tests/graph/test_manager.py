@@ -114,6 +114,27 @@ def test_failed_report_within_budget_is_retried(deps, store: StateStore) -> None
     assert store.get_task("w-1").status == "pending"
 
 
+def test_retry_entry_carries_feedback_from_failed_report(deps, store: StateStore) -> None:
+    """Phase 10: a retried task rides with its previous attempt's feedback so
+    the rebuilt worker prompt says what went wrong (the identical-prompt retry
+    used to repeat the same mistakes)."""
+    worktrees, policy = deps
+    task = make_worker_task("w-1", status="failed")
+    store.save_task(task)
+
+    decision = review_reports(
+        reports=[make_report("w-1", passed=False)],
+        worker_tasks=[task],
+        attempts={"w-1": 1},
+        worktrees=worktrees,
+        retry_policy=policy,
+        store=store,
+    )
+    feedback = decision.retry[0]["feedback"]
+    assert "Previous attempt feedback" in feedback
+    assert "tests failed in worktree" in feedback
+
+
 def test_failed_report_past_cap_fails_for_good(deps, store: StateStore) -> None:
     worktrees, policy = deps
     task = make_worker_task("w-1", status="failed")
@@ -224,7 +245,7 @@ def test_review_emits_merge_and_retry_events(deps, store: StateStore) -> None:
     )
 
     assert ("merge", {"task_id": "w-1"}) in runlog.events
-    assert ("retry", {"task_id": "w-2", "attempt": 2}) in runlog.events
+    assert ("retry", {"task_id": "w-2", "attempt": 2, "with_feedback": True}) in runlog.events
 
 
 def test_missing_report_means_not_done(deps, store: StateStore) -> None:

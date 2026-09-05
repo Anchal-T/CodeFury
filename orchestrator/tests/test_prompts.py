@@ -42,3 +42,25 @@ def test_prompt_prepends_knowledge_context_before_task() -> None:
 def test_prompt_without_context_omits_the_section() -> None:
     prompt = build_worker_prompt(make_task(), knowledge_context="")
     assert "Project knowledge" not in prompt
+
+
+def test_prompt_includes_retry_feedback_before_task() -> None:
+    """Phase 10: on retries the previous attempt's feedback block rides
+    between the knowledge header and the task payload."""
+    prompt = build_worker_prompt(
+        make_task(),
+        knowledge_context="auth module merged last round",
+        feedback="## Previous attempt feedback\n\n- tests failed in worktree",
+    )
+    assert "Previous attempt feedback" in prompt
+    assert "tests failed in worktree" in prompt
+    knowledge_pos = prompt.index("auth module merged")
+    feedback_pos = prompt.index("Previous attempt feedback")
+    task_pos = prompt.index("Task (JSON)")
+    assert knowledge_pos < feedback_pos < task_pos
+
+
+def test_prompt_without_feedback_omits_the_block() -> None:
+    """First attempts (and every existing caller) see no feedback block."""
+    prompt = build_worker_prompt(make_task())
+    assert "Previous attempt feedback" not in prompt
