@@ -23,6 +23,20 @@ from orchestrator.memory.store import StateStore
 EVAL_BRANCH_PREFIX = "orchestrator/eval-"
 
 
+def _check_eval_db(eval_db: Path, source_db: Path, live_db: Path) -> None:
+    destination = eval_db.resolve()
+    for role, database in (("source", source_db), ("live", live_db)):
+        protected = database.resolve()
+        try:
+            same_file = destination.samefile(protected)
+        except FileNotFoundError:
+            same_file = False
+        if destination == protected or same_file:
+            raise click.ClickException(
+                f"Eval database {eval_db} is the same file as the {role} database {database}"
+            )
+
+
 @click.command(name="eval")
 @click.option(
     "--from-db",
@@ -76,7 +90,9 @@ def eval_command(
 
     repo_root = find_repo_root((repo or Path.cwd()).resolve())
     eval_workspaces = base / config.paths.workspaces / "eval"
-    eval_db = (base / config.paths.db).with_name("eval.db")
+    live_db = base / config.paths.db
+    eval_db = live_db.with_name("eval.db")
+    _check_eval_db(eval_db, source_db, live_db)
     eval_db.parent.mkdir(parents=True, exist_ok=True)
 
     click.echo(
