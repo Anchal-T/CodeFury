@@ -6,6 +6,7 @@ One line per file. Updated in the same commit as any file add/remove/rename (AGE
 - `AGENTS.md` — coding conventions for agents working in this repo.
 - `README.md` — git branching & commit guide (main/dev/feature workflow).
 - `REPO_MAP.md` — this file: one line per file in the repo.
+- `docs/adr/0002-executor-boundary.md` — proposed Worker and Executor responsibilities and retry rules for ANC-5.
 - `orchestrator-build-plan.md` — architecture & phased build plan (untracked, local-only).
 - `orchestrator/.env.example` — template for env-supplied secrets (Z_AI_API_KEY); no .env loader exists in the package.
 - `orchestrator/.gitignore` — ignores Python caches, .venv, .env, and ephemeral workspaces/data/logs.
