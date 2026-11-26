@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from orchestrator.contracts import Report, Task
@@ -132,3 +133,32 @@ def test_eval_cli_unknown_task_id_fails_with_names(tmp_path: Path, python_bin: s
     proc = run_cli(root, python_bin, "eval", "--from-db", "data/source.db", "--task", "nope")
     assert proc.returncode != 0
     assert "nope" in proc.stderr
+
+
+@pytest.mark.parametrize("collision", ["source", "live", "hard-linked source"])
+def test_eval_cli_rejects_database_collision(
+    tmp_path: Path, python_bin: str, git_init, collision: str
+) -> None:
+    root = make_toy_repo(tmp_path, python_bin, git_init)
+    seed_source_db(root)
+    source_db = root / "data" / "source.db"
+    eval_db = root / "data" / "eval.db"
+    if collision == "source":
+        source_db = source_db.rename(eval_db)
+    elif collision == "live":
+        eval_db.write_bytes(source_db.read_bytes())
+        config_path = root / "config.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["paths"]["db"] = "./data/eval.db"
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    else:
+        eval_db.hardlink_to(source_db)
+    original_hash = _sha256(eval_db)
+
+    proc = run_cli(root, python_bin, "eval", "--from-db", str(source_db))
+
+    assert proc.returncode != 0
+    database_role = "live" if collision == "live" else "source"
+    assert f"same file as the {database_role} database" in proc.stderr
+    assert _sha256(eval_db) == original_hash
+    assert not (root / "workspaces" / "eval").exists()

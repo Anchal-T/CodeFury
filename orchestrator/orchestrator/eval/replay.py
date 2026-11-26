@@ -9,6 +9,7 @@ branches are namespaced (``orchestrator/eval-<task id>``).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,8 @@ from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
     from orchestrator.config import CriticConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,7 +80,10 @@ class EvalRunner:
             return ReplayResult(task_id=source_task.id, error=f"pipeline crashed: {exc!r}")
         finally:
             if not self.keep_worktrees:
-                self.worktrees.remove(task.id)
+                try:
+                    self.worktrees.remove(task.id)
+                except (OSError, RuntimeError) as exc:
+                    logger.warning("Could not remove eval worktree for %s (%s)", task.id, exc)
         return ReplayResult(task_id=source_task.id, report=report)
 
     def _context_for(self, task: Task) -> str:

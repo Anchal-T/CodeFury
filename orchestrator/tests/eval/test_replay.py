@@ -104,6 +104,32 @@ def test_replay_cleans_worktrees_by_default(
     assert "orchestrator/eval-w-1" not in _git(["branch", "--list"], cwd=git_repo)
 
 
+def test_cleanup_failure_preserves_result_and_continues_replaying(
+    git_repo: Path,
+    eval_store: StateStore,
+    python_bin: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner = make_eval_runner(git_repo, eval_store, python_bin, tmp_path)
+    remove = runner.worktrees.remove
+
+    def remove_with_timeout(task_id: str) -> None:
+        if task_id == "w-1":
+            raise RuntimeError("git worktree remove timed out")
+        remove(task_id)
+
+    monkeypatch.setattr(runner.worktrees, "remove", remove_with_timeout)
+
+    results = runner.run([make_task("w-1"), make_task("w-2")])
+
+    assert [result.task_id for result in results] == ["w-1", "w-2"]
+    assert all(result.report is not None and result.report.tests_passed for result in results)
+    assert "w-1" in caplog.text and "git worktree remove timed out" in caplog.text
+    assert not runner.worktrees.worktree_path("w-2").exists()
+
+
 def test_replay_keep_worktrees_flag_retains_them(
     git_repo: Path, eval_store: StateStore, python_bin: str, tmp_path: Path
 ) -> None:
