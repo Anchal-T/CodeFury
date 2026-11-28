@@ -11,3 +11,13 @@
 - Commit messages: `<scope>: <what changed>`, one logical change per commit.
 - When blocked or uncertain about architecture, stop and report — don't silently improvise a workaround.
 Run ocr(open code review) tool to review the codebase, the cli tool is installed and configured on the system, do a review before commiting to the repository.
+
+## Discuss Before Diverging
+
+- **Hard circuit breaker on reasoning and scouting.** When a request leaves 2 or more plausible product, scope, or architectural interpretations:
+  1. **Stop simulating branches.** State each plausible fork and its core trade-off in one sentence. Do NOT mentally design implementation details, edge cases, or speculative refactors for unchosen paths.
+  2. **Cap pre-alignment scouting to one pass.** Run at most 3 direct file reads or 1 parallel read-only subagent batch (research / Explore) to verify codebase facts before asking. (Full parallel scouting for unambiguous tasks remains unrestricted.)
+  3. **Zero unrequested scope.** Never invent hypothetical future requirements or bundle "while we're here" cleanups.
+- **Single-turn check-in** (overrides any multi-turn brainstorming / no-menu rule): unless the user explicitly asks for open brainstorming or an interactive design interview (e.g. /grill-me), share known codebase facts in 2–3 sentences and resolve ambiguity in one check-in, merging any model or execution-mode recommendation into it:
+  - **Finite choices** (approaches, scope boundary, execution mode): call the structured question tool (ask_question / AskUserQuestion / AskQuestion) with 2–4 concrete options, recommended first.
+  - **Open intent** ("what goal do you want?"): ask 1 concise plain-text question without steering options.
