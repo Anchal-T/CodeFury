@@ -13,6 +13,7 @@ from orchestrator.contracts import CONFLICT_BLOCKER_PREFIX, Report, Task
 from orchestrator.execution.worktree_manager import MergeConflictError, WorktreeManager
 from orchestrator.governance.budget import BUDGET_EXHAUSTED_PREFIX
 from orchestrator.governance.retry_policy import RetryPolicy
+from orchestrator.graph.feedback import build_feedback
 from orchestrator.graph.outcome_recorder import (
     IntegrationGate,
     OutcomeRecorder,
@@ -21,6 +22,7 @@ from orchestrator.graph.outcome_recorder import (
 from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
     from orchestrator.logging_setup import RunLogger
     from orchestrator.memory.vector import VectorMemory
 
@@ -45,6 +47,7 @@ def review_reports(
     retry_policy: RetryPolicy,
     store: StateStore,
     runlog: "RunLogger | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> ReviewDecision:
     """Review the latest report per worker task and act on it.
 
@@ -52,7 +55,10 @@ def review_reports(
     a merge that conflicts fails the task without retry (conflict resolution
     is Domain Lead territory, Phase 3); anything failed within budget goes
     back to pending for another dispatch; past the cap it fails for good.
-    ``runlog`` receives merge/retry events (Phase 6).
+    ``runlog`` receives merge/retry events (Phase 6). ``critic`` (Phase 11)
+    carries the critic policy: in strict mode the Report's critic warnings
+    are promoted to blockers, so a tampering-looking report routes into the
+    Phase 10 retry-with-feedback path instead of merging.
     """
     decision = ReviewDecision()
     latest_by_task = {report.task_id: report for report in reports}
@@ -60,6 +66,11 @@ def review_reports(
         report = latest_by_task.get(task.id)
         if report is None:
             continue  # still running, nothing to review yet
+
+        if critic is not None and critic.strict and report.warnings:
+            report = report.model_copy(
+                update={"blockers": [*report.blockers, *report.warnings]}
+            )
 
         if report.tests_passed and not report.blockers:
             try:
@@ -89,9 +100,15 @@ def review_reports(
         if retry_policy.can_retry(task.id, attempts.get(task.id, 0)):
             task.status = "pending"
             store.save_task(task)
-            decision.retry.append(task.model_dump())
+            feedback = build_feedback(report)
+            decision.retry.append({**task.model_dump(), "feedback": feedback})
             if runlog is not None:
-                runlog.event("retry", task_id=task.id, attempt=attempts.get(task.id, 0) + 1)
+                runlog.event(
+                    "retry",
+                    task_id=task.id,
+                    attempt=attempts.get(task.id, 0) + 1,
+                    with_feedback=bool(feedback),
+                )
         else:
             decision.failed.append(task.id)
             decision.blockers.append(f"worker {task.id} exhausted retries")

@@ -5,7 +5,6 @@ pydantic
 pyyaml
 psutil
 click
-python-dotenv
 
 # Dev
 pytest

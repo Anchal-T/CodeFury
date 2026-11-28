@@ -27,7 +27,8 @@ class OrchestratorState(TypedDict, total=False):
     merged: Annotated[list[str], operator.add]             # merged worker task ids
     dispatched: Annotated[list[str], operator.add]         # task ids ever sent (dedupe)
     final_status: str                   # set when the manager finishes
-    retrying: list                      # current retry batch (overwritten per round)
+    retrying: list                      # current retry batch (overwritten per round;
+                                        # entries carry 'feedback' for the retry prompt)
     blockers: Annotated[list[str], operator.add]           # aggregate blockers
     manager_results: Annotated[list[dict], operator.add]   # one summary per finished manager
 

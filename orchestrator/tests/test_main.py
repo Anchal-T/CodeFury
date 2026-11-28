@@ -32,7 +32,7 @@ def _init_repo(root: Path, git_init) -> None:
 
 def _write_config(root: Path, python_bin: str) -> None:
     config = {
-        "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
+        "execution": {"worker_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
         "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces", "domains": "./domains"},
         "retries": {"max_worker_retries": 1, "max_reconcile_attempts": 1},
     }
@@ -243,7 +243,7 @@ def test_manage_command_runs_graph_end_to_end(
     root = tmp_path / "repo"
     _init_repo(root, git_init)
     config = {
-        "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
+        "execution": {"worker_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
         "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces"},
         "retries": {"max_worker_retries": 1},
     }
@@ -280,7 +280,7 @@ def test_lead_command_runs_lead_graph_end_to_end(
     root = tmp_path / "repo"
     _init_repo(root, git_init)
     config = {
-        "execution": {"zcode_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
+        "execution": {"worker_command": [python_bin, str(FAKE_WORKER)], "worker_timeout_s": 60},
         "paths": {"db": "./data/db.sqlite", "workspaces": "./workspaces", "domains": "./domains"},
         "retries": {"max_worker_retries": 1, "max_reconcile_attempts": 1},
     }

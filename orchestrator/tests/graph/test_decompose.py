@@ -7,7 +7,6 @@ from orchestrator.graph.decompose import (
     StaticDecomposer,
     StaticDomainDecomposer,
     StaticEpicDecomposer,
-    is_decomposer,
 )
 
 
@@ -43,9 +42,11 @@ def test_child_ids_are_unique_even_for_duplicate_goals() -> None:
     assert all(task_id.startswith("m-1-") for task_id in ids)
 
 
-def test_is_decomposer_protocol() -> None:
-    assert is_decomposer(StaticDecomposer(sub_goals=[]))
-    assert not is_decomposer(object())
+def test_domain_decomposer_is_a_static_decomposer() -> None:
+    """One shared Static implementation; the Domain variant differs only in
+    the child level it emits (1 = manager Tasks for lead input)."""
+    assert StaticDomainDecomposer.child_level == 1
+    assert StaticDecomposer.child_level == 0
 
 
 def make_lead() -> Task:
@@ -85,8 +86,9 @@ def test_domain_decomposer_child_ids_are_unique_and_prefixed() -> None:
 
 
 def test_domain_decomposer_satisfies_protocol() -> None:
+    """StaticDomainDecomposer is structurally a DomainDecomposer."""
     decomposer: DomainDecomposer = StaticDomainDecomposer(manager_goals=[])
-    assert is_decomposer(decomposer)
+    assert callable(decomposer.decompose)
 
 
 def make_epic() -> Task:

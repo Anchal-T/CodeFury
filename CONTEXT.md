@@ -61,3 +61,22 @@ Re-invoking a lead graph with the same thread id and input None so LangGraph con
 
 **Tier-1 memory / knowledge context** (Phase 5):
 The cheapest memory tier — git-tracked markdown sections (repo_map.md per domain, PROJECT_STATE.md) read via KnowledgeDocs and prepended to worker prompts and planning seams. The future LLM seam for decomposers.
+
+**Harness** (Phase 9):
+Whatever executes one Worker Task: today an agent-CLI subprocess, pluggable tomorrow (SDK/API backends). Selected by config `execution.harness`; everything above the execution layer depends only on the Runner protocol, never on a concrete backend.
+_Avoid_: agent runner, executor, zcode (that's one harness, not the concept)
+
+**Runner** (Phase 9):
+The harness contract: anything with `run(prompt, cwd) -> RunnerResult`. RunnerResult carries the run's outcome plus optional runner-reported token attribution; when a backend can't report, `effective_tokens()` falls back to the agent-CLI output convention (a standalone `TOKENS_USED: <n>` stdout line, last marker wins). The built-in CLI adapter is AgentCliRunner (`execution.cli_runner.py`), driven by `execution.worker_command` where a `{prompt}` placeholder is substituted in place or the prompt is appended as the last argv token.
+
+**Retry feedback** (Phase 10):
+The capped `Previous attempt feedback` prompt block built from a failed attempt's Report (blockers, summary tail) and injected into the retry prompt, so a re-dispatch starts from what went wrong instead of repeating it. Built by graph/feedback.py; empty when the Report has nothing actionable.
+_Avoid_: error message, retry reason (that's a Blocker; feedback is the whole block)
+
+**Critic** (Phase 11):
+The deterministic quality check run over each worker's committed diff and Report (test-file tampering, forbidden paths, churn sanity, BLOCKED.md inconsistency), producing `critic:`-prefixed warnings on the Report. Advisory by default; the manager's strict mode promotes warnings to blockers, feeding retry feedback.
+_Avoid_: linter, reviewer (that's a role; the critic is a heuristic pass)
+
+**Eval replay** (Phase 12):
+Re-running level-0 tasks from a saved run through the current pipeline (current prompts, harness, knowledge, critic) and comparing pass rates and token burn against the source reports — the regression harness for prompt/config/self-improvement changes. Read-only against the source database; replay worktrees and branches are namespaced (`orchestrator/eval-`) and never merged.
+_Avoid_: benchmark (that implies a fixed suite), test run (that's the per-worktree gate)

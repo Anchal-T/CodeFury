@@ -114,6 +114,27 @@ def test_failed_report_within_budget_is_retried(deps, store: StateStore) -> None
     assert store.get_task("w-1").status == "pending"
 
 
+def test_retry_entry_carries_feedback_from_failed_report(deps, store: StateStore) -> None:
+    """Phase 10: a retried task rides with its previous attempt's feedback so
+    the rebuilt worker prompt says what went wrong (the identical-prompt retry
+    used to repeat the same mistakes)."""
+    worktrees, policy = deps
+    task = make_worker_task("w-1", status="failed")
+    store.save_task(task)
+
+    decision = review_reports(
+        reports=[make_report("w-1", passed=False)],
+        worker_tasks=[task],
+        attempts={"w-1": 1},
+        worktrees=worktrees,
+        retry_policy=policy,
+        store=store,
+    )
+    feedback = decision.retry[0]["feedback"]
+    assert "Previous attempt feedback" in feedback
+    assert "tests failed in worktree" in feedback
+
+
 def test_failed_report_past_cap_fails_for_good(deps, store: StateStore) -> None:
     worktrees, policy = deps
     task = make_worker_task("w-1", status="failed")
@@ -224,7 +245,62 @@ def test_review_emits_merge_and_retry_events(deps, store: StateStore) -> None:
     )
 
     assert ("merge", {"task_id": "w-1"}) in runlog.events
-    assert ("retry", {"task_id": "w-2", "attempt": 2}) in runlog.events
+    assert ("retry", {"task_id": "w-2", "attempt": 2, "with_feedback": True}) in runlog.events
+
+
+def test_strict_critic_promotes_warnings_to_blockers(deps, store: StateStore) -> None:
+    """Phase 11 strict mode: critic warnings become blockers, so the report
+    routes into the Phase 10 retry-with-feedback path instead of merging."""
+    from orchestrator.config import CriticConfig
+
+    worktrees, policy = deps
+    task = make_worker_task("w-1", status="review")
+    store.save_task(task)
+    report = make_report("w-1", passed=True).model_copy(
+        update={"warnings": ["critic: worker modified test files: tests/test_x.py"]}
+    )
+
+    decision = review_reports(
+        reports=[report],
+        worker_tasks=[task],
+        attempts={"w-1": 1},
+        worktrees=worktrees,
+        retry_policy=policy,
+        store=store,
+        critic=CriticConfig(strict=True),
+    )
+    assert decision.merged == []
+    assert [t["id"] for t in decision.retry] == ["w-1"]
+    assert store.get_task("w-1").status == "pending"
+
+
+def test_non_strict_critic_leaves_passing_reports_alone(
+    deps, store: StateStore, git_repo: Path
+) -> None:
+    """Default (advisory) mode: warnings never change the merge decision."""
+    from orchestrator.config import CriticConfig
+
+    worktrees, policy = deps
+    task = make_worker_task("w-1")
+    store.save_task(task)
+    worktree = worktrees.create("w-1")
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    worktrees.commit("w-1", "worker change")
+    report = make_report("w-1", passed=True).model_copy(
+        update={"warnings": ["critic: worker modified test files: tests/test_x.py"]}
+    )
+
+    decision = review_reports(
+        reports=[report],
+        worker_tasks=[task],
+        attempts={"w-1": 1},
+        worktrees=worktrees,
+        retry_policy=policy,
+        store=store,
+        critic=CriticConfig(),
+    )
+    assert decision.merged == ["w-1"]
+    assert decision.retry == []
 
 
 def test_missing_report_means_not_done(deps, store: StateStore) -> None:

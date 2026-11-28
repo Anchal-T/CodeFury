@@ -8,70 +8,26 @@ manager are all injected, so the loop is unit-testable without a real LLM.
 from __future__ import annotations
 
 import asyncio
-import re
-import subprocess
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orchestrator.config import PYTEST_NO_TESTS_EXIT_CODE
 from orchestrator.contracts import Report, Task
+from orchestrator.execution.runner import Runner, RunnerResult
+from orchestrator.execution.tests_runner import TEST_TIMEOUT_S, TestResult, run_tests
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import RunnerResult, ZCodeRunner
 from orchestrator.governance.budget import BudgetTracker
+from orchestrator.graph.critic import criticize
 from orchestrator.memory.store import StateStore
 from orchestrator.prompts import build_worker_prompt
 
 if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
     from orchestrator.logging_setup import RunLogger
+    from orchestrator.memory.knowledge_docs import KnowledgeDocs
     from orchestrator.memory.vector import VectorMemory
 
-TEST_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 500
-
-#: Worker output convention for token attribution (Phase 6): a standalone
-#: 'TOKENS_USED: <n>' line; the last marker wins when retries append output.
-TOKENS_USED_PATTERN = re.compile(r"^TOKENS_USED:\s*(\d+)\s*$", re.MULTILINE)
-
-
-def _parse_tokens_used(*outputs: str) -> int:
-    """Extract reported token usage from worker output; absent/malformed → 0."""
-    matches = TOKENS_USED_PATTERN.findall("\n".join(outputs))
-    return int(matches[-1]) if matches else 0
-
-
-@dataclass
-class TestResult:
-    passed: bool
-    output: str
-    timed_out: bool = False
-
-
-def run_tests(test_command: list[str], cwd: Path, timeout: float = TEST_TIMEOUT_S) -> TestResult:
-    """Run the test command in the worktree (list-form, shell=False).
-
-    A timeout is a test failure, not an exception: the caller must always
-    get a TestResult so a Report can be persisted.
-    """
-    try:
-        proc = subprocess.run(
-            test_command,
-            cwd=str(cwd),
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return TestResult(
-            passed=False,
-            output=f"tests timed out after {timeout:.0f}s",
-            timed_out=True,
-        )
-    output = (proc.stdout or "") + (proc.stderr or "")
-    passed = proc.returncode in (0, PYTEST_NO_TESTS_EXIT_CODE)
-    return TestResult(passed=passed, output=output.strip())
 
 
 def _summarize(result: RunnerResult, tests: TestResult) -> str:
@@ -107,13 +63,15 @@ def run_worker_task(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     tests_timeout: float = TEST_TIMEOUT_S,
     knowledge_context: str = "",
+    feedback: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> Report:
     """Execute one Task end-to-end and persist the Report.
 
@@ -121,11 +79,12 @@ def run_worker_task(
     Report is ALWAYS saved — even when the pipeline itself crashes — so a
     task is never left in_progress with no trace of what happened.
     ``knowledge_context`` carries the latest Tier-1 memory section (plan §9
-    Phase 5) into the worker prompt. ``budget`` (Phase 6) gates the dispatch:
-    an exhausted level budget short-circuits with a blocker Report before any
-    worktree or subprocess exists. ``runlog`` receives task_start/task_end
-    events for the JSONL run log (Phase 6). ``memory`` (Phase 7) indexes the
-    report summary into Tier-3 semantic memory.
+    Phase 5) into the worker prompt. ``feedback`` (Phase 10) carries the
+    previous attempt's feedback block on retries. ``budget`` (Phase 6) gates
+    the dispatch: an exhausted level budget short-circuits with a blocker
+    Report before any worktree or subprocess exists. ``runlog`` receives
+    task_start/task_end events for the JSONL run log. ``memory`` (Phase 7)
+    indexes the report summary into Tier-3 semantic memory.
     """
     task.status = "in_progress"
     store.save_task(task)
@@ -138,9 +97,11 @@ def run_worker_task(
             test_command=test_command,
             tests_timeout=tests_timeout,
             knowledge_context=knowledge_context,
+            feedback=feedback,
             budget=budget,
             runlog=runlog,
             memory=memory,
+            critic=critic,
         )
     except Exception as exc:
         report = Report(
@@ -163,13 +124,15 @@ def _run_pipeline(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     tests_timeout: float,
     knowledge_context: str = "",
+    feedback: str = "",
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ) -> Report:
     if runlog is not None:
         runlog.event("task_start", task_id=task.id, level=task.level)
@@ -194,11 +157,12 @@ def _run_pipeline(
             return report
 
         worktree = worktrees.create(task.id)
-        result = runner.run(build_worker_prompt(task, knowledge_context), cwd=worktree)
+        prompt = build_worker_prompt(task, knowledge_context, feedback)
+        result = runner.run(prompt, cwd=worktree)
         tests = run_tests(test_command, cwd=worktree, timeout=tests_timeout)
         worktrees.commit(task.id, f"worker({task.id}): {task.goal}")
 
-        tokens_used = _parse_tokens_used(result.stdout, result.stderr)
+        tokens_used = result.effective_tokens()
         if budget is not None:
             budget.record(task.level, tokens_used)
 
@@ -212,6 +176,24 @@ def _run_pipeline(
             tokens_used=tokens_used,
             blockers=blockers,
         )
+        if critic is not None and critic.enabled:
+            # Critique after the commit so the merge-base diff exists; git
+            # trouble skips the diff heuristics (fail-soft, never blocks).
+            try:
+                changed_files: list[str] | None = worktrees.changed_files(task.id)
+            except RuntimeError:
+                changed_files = None
+            if changed_files is not None:
+                critique = criticize(
+                    report,
+                    changed_files=changed_files,
+                    blocked=(worktree / "BLOCKED.md").is_file(),
+                    config=critic,
+                )
+                if critique.warnings:
+                    report = report.model_copy(update={"warnings": critique.warnings})
+                    if runlog is not None:
+                        runlog.event("critic", task_id=task.id, warnings=critique.warnings)
         store.save_report(report)
         task.status = "failed" if blockers else "review"
         store.save_task(task)
@@ -230,7 +212,7 @@ def make_worker_node(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     test_command: list[str],
     max_workers: int = 3,
     tests_timeout: float = TEST_TIMEOUT_S,
@@ -240,8 +222,13 @@ def make_worker_node(
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory: "VectorMemory | None" = None,
+    critic: "CriticConfig | None" = None,
 ):
     """Build the async LangGraph worker node with a concurrency cap.
+
+    The node's state input is the Send payload: ``task`` (serialized Task),
+    ``attempt`` (1-based dispatch count), and ``feedback`` (Phase 10: the
+    previous attempt's feedback block on retries, "" on first dispatch).
 
     The semaphore enforces config concurrency.max_workers (plan §4): never
     more worker subprocesses than the budget allows, real parallelism below
@@ -272,6 +259,7 @@ def make_worker_node(
         task = Task.model_validate(state["task"])
         attempt = int(state.get("attempt", 1))
         knowledge_context = _context_for(task)
+        feedback = str(state.get("feedback", ""))
         async with sem:
             report = await asyncio.to_thread(
                 run_worker_task,
@@ -282,9 +270,11 @@ def make_worker_node(
                 test_command=test_command,
                 tests_timeout=tests_timeout,
                 knowledge_context=knowledge_context,
+                feedback=feedback,
                 budget=budget,
                 runlog=runlog,
                 memory=memory,
+                critic=critic,
             )
         return {
             "reports": [report.model_dump()],

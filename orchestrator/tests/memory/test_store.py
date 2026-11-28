@@ -49,8 +49,9 @@ def store(tmp_path: Path) -> StateStore:
 def test_init_schema_creates_all_tables(store: StateStore) -> None:
     # The legacy stub `checkpoints` table is gone in Phase 5; SqliteSaver owns
     # its own checkpoints/writes tables, created lazily on first use.
+    # The never-used `agents` table was removed (dead since Phase 2).
     assert set(store.table_names()) == {
-        "tasks", "reports", "agents", "token_usage", "vector_entries",
+        "tasks", "reports", "token_usage", "vector_entries",
     }
 
 

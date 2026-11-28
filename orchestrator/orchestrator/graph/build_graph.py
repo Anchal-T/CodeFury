@@ -15,8 +15,9 @@ from langgraph.graph import StateGraph
 from langgraph.types import Send
 
 from orchestrator.contracts import Report, Task
+from orchestrator.execution.runner import Runner
+from orchestrator.execution.tests_runner import TEST_TIMEOUT_S
 from orchestrator.execution.worktree_manager import WorktreeManager
-from orchestrator.execution.zcode_runner import ZCodeRunner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.governance.retry_policy import RetryPolicy
 from orchestrator.graph.decompose import Decomposer
@@ -26,6 +27,7 @@ from orchestrator.graph.worker import TEST_TIMEOUT_S, make_worker_node
 from orchestrator.memory.store import StateStore
 
 if TYPE_CHECKING:
+    from orchestrator.config import CriticConfig
     from orchestrator.logging_setup import RunLogger
 
 
@@ -33,7 +35,7 @@ def build_graph(
     *,
     store: StateStore,
     worktrees: WorktreeManager,
-    runner: ZCodeRunner,
+    runner: Runner,
     decomposer: Decomposer,
     retry_policy: RetryPolicy,
     test_command: list[str],
@@ -45,6 +47,7 @@ def build_graph(
     budget: BudgetTracker | None = None,
     runlog: "RunLogger | None" = None,
     memory=None,
+    critic: "CriticConfig | None" = None,
 ):
     """Assemble and compile the Manager/Worker StateGraph with injected deps.
 
@@ -52,7 +55,8 @@ def build_graph(
     graphs (the Domain Lead passes its own so the global worker budget holds).
     ``knowledge`` + ``domains_dir`` wire Tier-1 memory into worker prompts
     (Phase 5). ``budget`` gates dispatch when a level's tokens are exhausted;
-    ``runlog`` receives merge/retry/report/task events (Phase 6).
+    ``runlog`` receives merge/retry/report/task events (Phase 6); ``critic``
+    (Phase 11) enables the deterministic report critic and its strict policy.
     """
     worker = make_worker_node(
         store=store,
@@ -67,6 +71,7 @@ def build_graph(
         budget=budget,
         runlog=runlog,
         memory=memory,
+        critic=critic,
     )
 
     def _result(
@@ -121,6 +126,7 @@ def build_graph(
             retry_policy=retry_policy,
             store=store,
             runlog=runlog,
+            critic=critic,
         )
         update: dict = {
             "merged": decision.merged,
@@ -153,7 +159,14 @@ def build_graph(
             return END
         attempts = state.get("attempts", {})
         return [
-            Send("worker", {"task": task, "attempt": attempts.get(task["id"], 0) + 1})
+            Send(
+                "worker",
+                {
+                    "task": task,
+                    "attempt": attempts.get(task["id"], 0) + 1,
+                    "feedback": task.get("feedback", ""),
+                },
+            )
             for task in batch
         ]
 

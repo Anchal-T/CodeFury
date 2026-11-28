@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 def _no_semantic_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep Tier-3 semantic memory out of the default suite: indexing/recall
     would load the real ONNX model. Slow-marked tests opt back in by deleting
-    the variable (mirrors how ambient env is handled for ZCODE_CMD)."""
+    the variable (mirrors how ambient env is handled for WORKER_CMD)."""
     monkeypatch.setenv("ORCHESTRATOR_SEMANTIC", "0")
 
 

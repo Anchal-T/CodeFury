@@ -10,15 +10,37 @@ REPO_CONFIG = Path(__file__).resolve().parents[1] / "config.yaml"
 
 
 @pytest.fixture(autouse=True)
-def _no_zcode_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep ambient ZCODE_CMD (e.g. set for a demo run) out of file-loading tests."""
+def _no_worker_cmd_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ambient WORKER_CMD/ZCODE_CMD (e.g. set for a demo run) out of
+    file-loading tests."""
+    monkeypatch.delenv("WORKER_CMD", raising=False)
     monkeypatch.delenv("ZCODE_CMD", raising=False)
 
 
 def test_committed_config_parses() -> None:
     """Smoke-check only: the committed config.yaml is a tuned deployment
     artifact — its operational values must not be pinned here."""
-    assert load_config(REPO_CONFIG).raw
+    assert load_config(REPO_CONFIG).concurrency.max_workers == 3
+
+
+def test_unknown_keys_are_ignored(tmp_path: Path) -> None:
+    """Untuned/extra keys in config.yaml (deploy-time metadata, future knobs)
+    must not break loading — the loader pins only the schema it knows."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_effort:\n  simple_task: low\nunknown_section:\n  a: 1\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.concurrency.max_workers == 3
+
+
+def test_negative_max_managers_is_not_validated_away(tmp_path: Path) -> None:
+    """max_managers was removed with the concurrency cap it once fed; until a
+    consumer exists it is an inert key — loading must simply ignore it."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("concurrency:\n  max_managers: -2\n", encoding="utf-8")
+    assert load_config(config_file).concurrency.max_workers == 3
 
 
 def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
@@ -27,7 +49,7 @@ def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         "execution:\n"
-        "  zcode_command: [/usr/bin/python3, agent.py]\n"
+        "  worker_command: [/usr/bin/python3, agent.py]\n"
         "  worker_timeout_s: 60\n"
         "paths:\n"
         "  db: ./custom.db\n"
@@ -37,7 +59,7 @@ def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     config = load_config(config_file)
-    assert config.execution.zcode_command == ["/usr/bin/python3", "agent.py"]
+    assert config.execution.worker_command == ["/usr/bin/python3", "agent.py"]
     assert config.execution.worker_timeout_s == 60.0
     assert config.paths.db == Path("./custom.db")
     assert config.paths.workspaces == Path("./ws")
@@ -46,7 +68,8 @@ def test_explicit_values_load_from_fixture(tmp_path: Path) -> None:
 
 def test_missing_file_falls_back_to_defaults() -> None:
     config = load_config(Path("does-not-exist.yaml"))
-    assert config.execution.zcode_command == ["zcode"]
+    assert config.execution.worker_command == ["zcode"]
+    assert config.execution.harness == "cli"
     assert config.execution.test_command == DEFAULT_TEST_COMMAND
     assert config.paths.db == Path("./data/orchestrator.db")
     assert config.paths.logs == Path("./logs")
@@ -109,22 +132,40 @@ def test_custom_yaml_sections(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         "execution:\n"
-        "  zcode_command: [/usr/bin/python3, agent.py]\n"
+        "  worker_command: [/usr/bin/python3, agent.py]\n"
         "  worker_timeout_s: 60\n"
         "paths:\n"
         "  db: ./custom.db\n",
         encoding="utf-8",
     )
     config = load_config(config_file)
-    assert config.execution.zcode_command == ["/usr/bin/python3", "agent.py"]
+    assert config.execution.worker_command == ["/usr/bin/python3", "agent.py"]
     assert config.execution.worker_timeout_s == 60.0
     assert config.paths.db == Path("./custom.db")
 
 
 def test_env_var_overrides_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORKER_CMD", "python3 scripts/fake_worker.py")
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.execution.worker_command == ["python3", "scripts/fake_worker.py"]
+
+
+def test_legacy_zcode_cmd_env_still_overrides_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-Phase-9 environments export ZCODE_CMD; it must keep working."""
     monkeypatch.setenv("ZCODE_CMD", "python3 scripts/fake_worker.py")
     config = load_config(tmp_path / "missing.yaml")
-    assert config.execution.zcode_command == ["python3", "scripts/fake_worker.py"]
+    assert config.execution.worker_command == ["python3", "scripts/fake_worker.py"]
+
+
+def test_worker_cmd_wins_over_legacy_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZCODE_CMD", "legacy-agent")
+    monkeypatch.setenv("WORKER_CMD", "new-agent")
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.execution.worker_command == ["new-agent"]
 
 
 def test_env_var_overrides_command_keeps_quoted_args(
@@ -132,23 +173,106 @@ def test_env_var_overrides_command_keeps_quoted_args(
 ) -> None:
     """Quoted arguments (spaces inside a single argv token) must survive —
     plain str.split() would silently mangle them into wrong argv entries."""
-    monkeypatch.setenv("ZCODE_CMD", '"/usr/local/my agent/bin/zcode" --flag "slow tests"')
+    monkeypatch.setenv("WORKER_CMD", '"/usr/local/my agent/bin/agent" --flag "slow tests"')
     config = load_config(tmp_path / "missing.yaml")
-    assert config.execution.zcode_command == [
-        "/usr/local/my agent/bin/zcode",
+    assert config.execution.worker_command == [
+        "/usr/local/my agent/bin/agent",
         "--flag",
         "slow tests",
     ]
 
 
-def test_quoted_yaml_scalar_command_parsed_with_shlex(tmp_path: Path) -> None:
+def test_legacy_zcode_command_key_still_loads(tmp_path: Path) -> None:
+    """Pre-Phase-9 config.yaml files name the key zcode_command; the loader
+    accepts it as a fallback so existing deployments keep working."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
-        'execution:\n  zcode_command: \'run-agent --name "my agent"\'\n',
+        "execution:\n  zcode_command: [/usr/bin/python3, agent.py]\n",
         encoding="utf-8",
     )
     config = load_config(config_file)
-    assert config.execution.zcode_command == ["run-agent", "--name", "my agent"]
+    assert config.execution.worker_command == ["/usr/bin/python3", "agent.py"]
+
+
+def test_worker_command_key_wins_over_legacy_key(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "execution:\n"
+        "  zcode_command: [legacy, agent]\n"
+        "  worker_command: [current, agent]\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.worker_command == ["current", "agent"]
+
+
+def test_empty_worker_command_falls_back_to_legacy_key(tmp_path: Path) -> None:
+    """An explicit empty worker_command carries no opinion; a present legacy
+    key must still be honored rather than silently dropping to the default."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "execution:\n"
+        "  zcode_command: [legacy, agent]\n"
+        "  worker_command: []\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.worker_command == ["legacy", "agent"]
+
+
+def test_critic_section_defaults_when_missing() -> None:
+    config = load_config(Path("does-not-exist.yaml"))
+    assert config.critic.enabled is True
+    assert config.critic.strict is False
+    assert config.critic.max_changed_files == 20
+    assert config.critic.forbidden_globs, "sane forbidden-path defaults must exist"
+
+
+def test_critic_section_loads_overrides(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "critic:\n"
+        "  enabled: true\n"
+        "  strict: true\n"
+        "  max_changed_files: 5\n"
+        "  forbidden_globs: ['.env*', '*.pem']\n",
+        encoding="utf-8",
+    )
+    critic = load_config(config_file).critic
+    assert critic.enabled is True
+    assert critic.strict is True
+    assert critic.max_changed_files == 5
+    assert critic.forbidden_globs == [".env*", "*.pem"]
+
+
+def test_critic_can_be_disabled(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("critic:\n  enabled: false\n", encoding="utf-8")
+    assert load_config(config_file).critic.enabled is False
+
+
+def test_critic_invalid_max_changed_files_rejected(tmp_path: Path) -> None:
+    """A cap below 1 would flag every real change as churn — reject at load."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("critic:\n  max_changed_files: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="max_changed_files"):
+        load_config(config_file)
+
+
+def test_harness_selects_backend(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("execution:\n  harness: cli\n", encoding="utf-8")
+    assert load_config(config_file).execution.harness == "cli"
+
+
+def test_quoted_yaml_scalar_command_parsed_with_shlex(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        'execution:\n  worker_command: \'run-agent --name "my agent"\'\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_file)
+    assert config.execution.worker_command == ["run-agent", "--name", "my agent"]
 
 
 def test_existing_but_unusable_config_path_warns(tmp_path: Path, caplog) -> None:
@@ -160,7 +284,7 @@ def test_existing_but_unusable_config_path_warns(tmp_path: Path, caplog) -> None
     directory.mkdir()
     with caplog.at_level(logging.WARNING, logger="orchestrator.config"):
         config = load_config(directory)
-    assert config.execution.zcode_command  # defaults still apply
+    assert config.execution.worker_command  # defaults still apply
     assert any("not a readable file" in record.message for record in caplog.records)
 
 

@@ -16,6 +16,7 @@ import click
 
 from orchestrator.cli_epic import approve as approve_command
 from orchestrator.cli_epic import start as start_command
+from orchestrator.cli_eval import eval_command
 from orchestrator.cli_status import (
     follow_file,
     newest_run_file,
@@ -26,10 +27,9 @@ from orchestrator.cli_status import (
 from orchestrator.config import load_config
 from orchestrator.contracts import Task
 from orchestrator.execution.worktree_manager import WorktreeManager, find_repo_root
-from orchestrator.execution.zcode_runner import ZCodeRunner
+from orchestrator.execution.runner import build_runner
 from orchestrator.governance.budget import BudgetTracker
 from orchestrator.governance.retry_policy import RetryPolicy
-from orchestrator.graph.architect import finalize_epic, plan_epic, run_approved_leads
 from orchestrator.graph.build_graph import build_graph
 from orchestrator.graph.decompose import (
     SingleManagerDecomposer,
@@ -39,7 +39,7 @@ from orchestrator.graph.decompose import (
 )
 from orchestrator.graph.lead_graph import build_lead_graph
 from orchestrator.graph.worker import run_worker_task
-from orchestrator.logging_setup import RunLogger, setup_logging
+from orchestrator.logging_setup import setup_logging
 from orchestrator.memory.knowledge_docs import KnowledgeDocs, parse_sections
 from orchestrator.memory.store import StateStore
 from orchestrator.memory.vector import auto_memory, recall_context
@@ -52,6 +52,7 @@ def cli() -> None:
 
 cli.add_command(start_command)
 cli.add_command(approve_command)
+cli.add_command(eval_command)
 
 
 def _budget(store: StateStore, config) -> BudgetTracker:
@@ -89,31 +90,26 @@ def run(goal: str, deliverable: str | None, task_id: str | None, config_path: Pa
         status="pending",
         assigned_to=None,
     )
-    runner = ZCodeRunner(
-        command=config.execution.zcode_command,
-        timeout=config.execution.worker_timeout_s,
-    )
+    runner = build_runner(config.execution)
     # Relative paths in config.yaml resolve against the config file's
     # directory (base), so runtime artifacts stay under orchestrator/.
     worktrees = WorktreeManager(repo_root, base / config.paths.workspaces)
     runlog = setup_logging(base / config.paths.logs)
-    try:
-        with StateStore(base / config.paths.db) as store:
-            store.init_schema()
-            memory = auto_memory(store)
-            click.echo(f"[run] task {task.id} → worker loop (repo: {repo_root})")
-            report = run_worker_task(
-                task,
-                store=store,
-                worktrees=worktrees,
-                runner=runner,
-                test_command=config.execution.test_command,
-                budget=_budget(store, config),
-                runlog=runlog,
-                memory=memory,
-            )
-    finally:
-        runlog.close()
+    with runlog, StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        memory = auto_memory(store)
+        click.echo(f"[run] task {task.id} → worker loop (repo: {repo_root})")
+        report = run_worker_task(
+            task,
+            store=store,
+            worktrees=worktrees,
+            runner=runner,
+            test_command=config.execution.test_command,
+            budget=_budget(store, config),
+            runlog=runlog,
+            memory=memory,
+            critic=config.critic,
+        )
     click.echo(
         f"\n[report] task={report.task_id} agent={report.agent}\n"
         f"  tests_passed: {report.tests_passed}\n"
@@ -155,31 +151,26 @@ def manage(goal: str, sub_goals: tuple[str, ...], task_id: str | None, config_pa
         assigned_to=None,
     )
     runlog = setup_logging(base / config.paths.logs)
-    try:
-        with StateStore(base / config.paths.db) as store:
-            store.init_schema()
-            memory = auto_memory(store)
-            graph = build_graph(
-                store=store,
-                worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
-                runner=ZCodeRunner(
-                    command=config.execution.zcode_command,
-                    timeout=config.execution.worker_timeout_s,
-                ),
-                decomposer=StaticDecomposer(list(sub_goals)),
-                retry_policy=RetryPolicy.from_config(config),
-                test_command=config.execution.test_command,
-                max_workers=config.concurrency.max_workers,
-                knowledge=KnowledgeDocs(),
-                domains_dir=base / config.paths.domains,
-                budget=_budget(store, config),
-                runlog=runlog,
-                memory=memory,
-            )
-            click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
-            result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))
-    finally:
-        runlog.close()
+    with runlog, StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        memory = auto_memory(store)
+        graph = build_graph(
+            store=store,
+            worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
+            runner=build_runner(config.execution),
+            decomposer=StaticDecomposer(list(sub_goals)),
+            retry_policy=RetryPolicy.from_config(config),
+            test_command=config.execution.test_command,
+            max_workers=config.concurrency.max_workers,
+            knowledge=KnowledgeDocs(),
+            domains_dir=base / config.paths.domains,
+            budget=_budget(store, config),
+            runlog=runlog,
+            memory=memory,
+            critic=config.critic,
+        )
+        click.echo(f"[manage] task {parent.id} → {len(sub_goals)} worker(s), cap {config.concurrency.max_workers}")
+        result = asyncio.run(graph.ainvoke({"manager_task": parent.model_dump()}))
 
     final = result.get("final_status", "unknown")
     attempts = result.get("attempts", {})
@@ -232,34 +223,29 @@ def lead(
         domain=domain,
     )
     runlog = setup_logging(base / config.paths.logs)
-    try:
-        with StateStore(base / config.paths.db) as store:
-            store.init_schema()
-            memory = auto_memory(store)
-            graph = build_lead_graph(
-                store=store,
-                worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
-                runner=ZCodeRunner(
-                    command=config.execution.zcode_command,
-                    timeout=config.execution.worker_timeout_s,
-                ),
-                decomposer=StaticDomainDecomposer(list(manager_goals)),
-                test_command=config.execution.test_command,
-                max_workers=config.concurrency.max_workers,
-                max_reconcile_attempts=config.retries.max_reconcile_attempts,
-                knowledge=KnowledgeDocs(),
-                domains_dir=base / config.paths.domains,
-                budget=_budget(store, config),
-                runlog=runlog,
-                memory=memory,
-            )
-            click.echo(
-                f"[lead] task {parent.id} → {len(manager_goals)} manager(s), "
-                f"cap {config.concurrency.max_workers}, reconcile cap {config.retries.max_reconcile_attempts}"
-            )
-            result = asyncio.run(graph.ainvoke({"lead_task": parent.model_dump()}))
-    finally:
-        runlog.close()
+    with runlog, StateStore(base / config.paths.db) as store:
+        store.init_schema()
+        memory = auto_memory(store)
+        graph = build_lead_graph(
+            store=store,
+            worktrees=WorktreeManager(repo_root, base / config.paths.workspaces),
+            runner=build_runner(config.execution),
+            decomposer=StaticDomainDecomposer(list(manager_goals)),
+            test_command=config.execution.test_command,
+            max_workers=config.concurrency.max_workers,
+            max_reconcile_attempts=config.retries.max_reconcile_attempts,
+            knowledge=KnowledgeDocs(),
+            domains_dir=base / config.paths.domains,
+            budget=_budget(store, config),
+            runlog=runlog,
+            memory=memory,
+            critic=config.critic,
+        )
+        click.echo(
+            f"[lead] task {parent.id} → {len(manager_goals)} manager(s), "
+            f"cap {config.concurrency.max_workers}, reconcile cap {config.retries.max_reconcile_attempts}"
+        )
+        result = asyncio.run(graph.ainvoke({"lead_task": parent.model_dump()}))
 
     outcome = result.get("outcome", "unknown")
     click.echo(

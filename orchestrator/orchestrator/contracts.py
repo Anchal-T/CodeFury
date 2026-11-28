@@ -33,3 +33,7 @@ class Report(BaseModel):
     tests_passed: bool
     tokens_used: int
     blockers: list[str] = Field(default_factory=list)
+    #: Non-gating quality notes from the deterministic critic (Phase 11);
+    #: strict manager mode may promote them to blockers. Old rows lack the
+    #: key — the default keeps them readable.
+    warnings: list[str] = Field(default_factory=list)

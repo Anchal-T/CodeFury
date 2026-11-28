@@ -2,7 +2,8 @@
 
 Each worker gets ``workspaces/worker_<id>/`` on its own branch; the pipeline
 commits the worker's changes there, and a Manager (Phase 2) reviews the diff
-and merges (``git merge --no-ff``) or discards. All git calls are list-form
+and merges (``git merge --no-ff``) or leaves the worktree for the next
+attempt. All git calls are list-form
 subprocess invocations with shell=False so this works on Linux and Windows.
 """
 
@@ -62,11 +63,23 @@ def find_repo_root(start: Path) -> Path:
 
 
 class WorktreeManager:
-    """Creates, commits, merges, and cleans up per-worker git worktrees."""
+    """Creates, commits, and merges per-worker git worktrees.
 
-    def __init__(self, repo_root: Path, workspaces_dir: Path) -> None:
+    ``branch_prefix`` namespaces the per-task branches; eval replays (Phase
+    12) pass ``orchestrator/eval-`` so replaying a task id never clobbers a
+    real run's worker branch.
+    """
+
+    def __init__(
+        self,
+        repo_root: Path,
+        workspaces_dir: Path,
+        *,
+        branch_prefix: str = _BRANCH_PREFIX,
+    ) -> None:
         self.repo_root = repo_root
         self.workspaces_dir = workspaces_dir
+        self.branch_prefix = branch_prefix
 
     def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         try:
@@ -89,7 +102,27 @@ class WorktreeManager:
         return proc.stdout
 
     def branch_name(self, worker_id: str) -> str:
-        return f"{_BRANCH_PREFIX}{sanitize_worker_id(worker_id)}"
+        return f"{self.branch_prefix}{sanitize_worker_id(worker_id)}"
+
+    def changed_files(self, worker_id: str) -> list[str]:
+        """Files the worker branch changed relative to where it was cut.
+
+        Anchored at the merge-base, so merges by other workers after this
+        branch was cut never pollute the diff. Empty when the branch has no
+        commits of its own (nothing was committed).
+        """
+        branch = self.branch_name(worker_id)
+        base = self._require(
+            self._git(["merge-base", "HEAD", branch], cwd=self.repo_root),
+            "merge-base",
+        ).strip()
+        if not base:
+            return []
+        output = self._require(
+            self._git(["diff", "--name-only", f"{base}..{branch}"], cwd=self.repo_root),
+            "diff --name-only",
+        )
+        return [line.strip() for line in output.splitlines() if line.strip()]
 
     def worktree_path(self, worker_id: str) -> Path:
         return self.workspaces_dir / f"worker_{sanitize_worker_id(worker_id)}"
@@ -122,6 +155,20 @@ class WorktreeManager:
         self._require(proc, f"worktree add {path}")
         return path
 
+    def remove(self, worker_id: str) -> None:
+        """Best-effort removal of a worktree and its branch (eval cleanup).
+
+        Tolerates an already-gone worktree or branch so replay cleanup never
+        turns into its own failure mode.
+        """
+        path = self.worktree_path(worker_id)
+        if self._git(["worktree", "remove", "--force", str(path)], cwd=self.repo_root).returncode != 0:
+            shutil.rmtree(path, ignore_errors=True)
+        self._git(["worktree", "prune"], cwd=self.repo_root)
+        branch = self.branch_name(worker_id)
+        if self._git(["branch", "--list", branch], cwd=self.repo_root).stdout.strip():
+            self._git(["branch", "-D", branch], cwd=self.repo_root)
+
     def commit(self, worker_id: str, message: str) -> bool:
         """Stage and commit all changes in the worker's worktree.
 
@@ -136,23 +183,6 @@ class WorktreeManager:
         self._require(self._git(["add", "-A"], cwd=path), "add")
         self._require(self._git(["commit", "-m", message], cwd=path), "commit")
         return True
-
-    def diff_stat(self, worker_id: str) -> str:
-        """One-line-per-file diff summary of the worker branch vs its base.
-
-        Runs against repo_root so the merge base is the fork point from the
-        integration branch (inside the worktree, HEAD *is* the worker
-        branch), and includes every commit the worker made.
-        """
-        branch = self.branch_name(worker_id)
-        base = self._require(
-            self._git(["merge-base", "HEAD", branch], cwd=self.repo_root),
-            "merge-base",
-        ).strip()
-        return self._require(
-            self._git(["diff", "--stat", f"{base}..{branch}"], cwd=self.repo_root),
-            "diff --stat",
-        ).strip()
 
     def merge(self, worker_id: str) -> None:
         """Merge the worker's branch into the current branch of repo_root with --no-ff.
@@ -176,20 +206,3 @@ class WorktreeManager:
                     f"git merge failed ({proc.returncode}): {detail}", files
                 )
             raise RuntimeError(f"git merge failed ({proc.returncode}): {detail}")
-
-    def discard(self, worker_id: str) -> None:
-        """Drop the worker's worktree and branch.
-
-        Best-effort teardown: tolerates state that is already gone (never
-        created, partially created, or previously discarded) instead of
-        raising — callers should not need defensive try/except around cleanup.
-        """
-        self._git(
-            ["worktree", "remove", "--force", str(self.worktree_path(worker_id))],
-            cwd=self.repo_root,
-        )
-        self._git(["branch", "-D", self.branch_name(worker_id)], cwd=self.repo_root)
-
-    def cleanup(self) -> None:
-        """Prune stale worktree metadata under workspaces_dir."""
-        self._require(self._git(["worktree", "prune"], cwd=self.repo_root), "worktree prune")
